@@ -179,6 +179,12 @@ COLUMN_ALIASES = {
     "x_id":         ["x id", "twitter id", "x name", "twitter name", "x_id", "twitterid"],
     "x_url":        ["x url", "twitter url", "xリンク", "twitterリンク", "x_url"],
     "display_name": ["name", "名前", "display name", "display_name", "nickname", "ニックネーム"],
+    "join_count":   ["join count", "join_count", "joins", "参加回数", "参加次数", "応募回数"],
+    "win_count":    ["win count", "win_count", "wins", "当選回数", "当选次数", "中奖次数"],
+    "current_probability": [
+        "current probability", "current_probability", "probability", "prob", "now probability",
+        "現在確率", "现在概率", "当前概率", "抽選確率", "抽签概率"
+    ],
 }
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -233,76 +239,82 @@ class VRCRaffleApp(tk.Tk):
         self.geometry("1150x750")
         self.minsize(960, 620)
         init_db()
-        self._apply_style()
-        self._build_ui()
         # 状態
         self._sort_col = "id"
         self._sort_rev = True
         self._players_sort_rev = True
+        self.imported_records = []
+        self.last_winner_indices = set()
+        self._apply_style()
+        self._build_ui()
 
 
     # ══════════════════════════════════════════════════════════════════════════
     #   スタイル
     # ══════════════════════════════════════════════════════════════════════════
     def _apply_style(self):
-        if FREE_BUILD:
-            # フリー版: ネイビー × シルバー
-            BG    = "#0d1b2a"
-            PANEL = "#1b263b"
-            ACC   = "#415a77"
-            HIGH  = "#778da9"
-            FG    = "#e0e1dd"
-            BADGE_BG = "#415a77"
-            BADGE_FG = "#e0e1dd"
-        else:
-            # Pro版: ダークパープル × ゴールド
-            BG    = "#12001f"
-            PANEL = "#1e003a"
-            ACC   = "#4a0080"
-            HIGH  = "#c084fc"
-            FG    = "#f3e8ff"
-            BADGE_BG = "#7c3aed"
-            BADGE_FG = "#fef9c3"
+        # 共通: シンプルな白 × ブルー基調
+        BG    = "#f6f9fc"
+        PANEL = "#ffffff"
+        ACC   = "#2563eb"
+        HIGH  = "#dbeafe"
+        FG    = "#172554"
+        MUTED = "#64748b"
+        BORDER = "#bfdbfe"
+        FIELD = "#ffffff"
+        SELECT_BG = "#2563eb"
+        SELECT_FG = "#ffffff"
+        BADGE_BG = "#dbeafe"
+        BADGE_FG = "#1d4ed8"
 
         self.BG = BG; self.PANEL = PANEL; self.ACC = ACC
         self.HIGH = HIGH; self.FG = FG
+        self.MUTED = MUTED; self.BORDER = BORDER; self.FIELD = FIELD
+        self.SELECT_BG = SELECT_BG; self.SELECT_FG = SELECT_FG
         self.configure(bg=BG)
 
         s = ttk.Style(self)
         s.theme_use("clam")
         s.configure(".",              background=BG,    foreground=FG,    font=("Yu Gothic UI", 10))
         s.configure("TNotebook",      background=BG,    borderwidth=0)
-        s.configure("TNotebook.Tab",  background=ACC,   foreground=FG,    padding=[14, 5])
-        s.map("TNotebook.Tab",        background=[("selected", HIGH)],
-                                      foreground=[("selected", BG)])
+        s.configure("TNotebook.Tab",  background="#eaf2ff", foreground=FG, padding=[14, 6])
+        s.map("TNotebook.Tab",        background=[("selected", PANEL), ("active", HIGH)],
+                                      foreground=[("selected", ACC), ("active", ACC)])
         s.configure("TFrame",         background=BG)
         s.configure("Panel.TFrame",   background=PANEL)
         s.configure("TLabel",         background=BG,    foreground=FG)
         s.configure("Panel.TLabel",   background=PANEL, foreground=FG)
-        s.configure("TButton",        background=ACC,   foreground=FG,    padding=[8, 4])
+        s.configure("Muted.TLabel",   background=BG,    foreground=MUTED)
+        s.configure("TButton",        background="#eaf2ff", foreground=ACC, padding=[8, 4],
+                    bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER)
         s.map("TButton",              background=[("active", HIGH)],
-                                      foreground=[("active", BG)])
-        s.configure("Accent.TButton", background=HIGH,  foreground=BG,    padding=[10, 5],
+                                      foreground=[("active", ACC)])
+        s.configure("Accent.TButton", background=ACC,  foreground=SELECT_FG, padding=[10, 5],
                     font=("Yu Gothic UI", 10, "bold"))
-        s.map("Accent.TButton",       background=[("active", FG)])
-        s.configure("TEntry",         fieldbackground="#050010" if not FREE_BUILD else "#06111f",
-                    foreground=FG, insertcolor=FG)
-        s.configure("TCombobox",      fieldbackground="#050010" if not FREE_BUILD else "#06111f",
-                    foreground=FG, selectbackground=ACC)
-        s.configure("Treeview",       background="#080015" if not FREE_BUILD else "#07121f",
+        s.map("Accent.TButton",       background=[("active", "#1d4ed8")])
+        s.configure("TEntry",         fieldbackground=FIELD,
+                    foreground=FG, insertcolor=FG, bordercolor=BORDER)
+        s.configure("TCombobox",      fieldbackground=FIELD,
+                    foreground=FG, selectbackground=SELECT_BG, selectforeground=SELECT_FG,
+                    bordercolor=BORDER, arrowcolor=ACC)
+        s.configure("Treeview",       background=FIELD,
                     foreground=FG,
-                    fieldbackground="#080015" if not FREE_BUILD else "#07121f",
-                    rowheight=26)
-        s.configure("Treeview.Heading", background=ACC, foreground=FG,
+                    fieldbackground=FIELD,
+                    rowheight=26,
+                    bordercolor=BORDER)
+        s.configure("Treeview.Heading", background="#eaf2ff", foreground=FG,
                     font=("Yu Gothic UI", 9, "bold"))
-        s.map("Treeview",             background=[("selected", HIGH)],
-                                      foreground=[("selected", BG)])
-        s.configure("TSpinbox",       fieldbackground="#050010" if not FREE_BUILD else "#06111f",
-                    foreground=FG)
+        s.map("Treeview",             background=[("selected", SELECT_BG)],
+                                      foreground=[("selected", SELECT_FG)])
+        s.configure("TSpinbox",       fieldbackground=FIELD,
+                    foreground=FG, bordercolor=BORDER, arrowcolor=ACC)
         s.configure("TRadiobutton",   background=PANEL, foreground=FG)
         s.configure("TCheckbutton",   background=PANEL, foreground=FG)
-        s.configure("TSeparator",     background=ACC)
-        s.configure("TScrollbar",     background=ACC,   troughcolor=BG)
+        s.map("TRadiobutton",         background=[("active", PANEL)])
+        s.map("TCheckbutton",         background=[("active", PANEL)])
+        s.configure("TSeparator",     background=BORDER)
+        s.configure("TScrollbar",     background="#cfe3ff", troughcolor=BG, bordercolor=BG,
+                    arrowcolor=ACC)
 
         # バッジ用
         self.BADGE_BG = BADGE_BG
@@ -314,17 +326,18 @@ class VRCRaffleApp(tk.Tk):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_ui(self):
         # ヘッダー
-        hdr = tk.Frame(self, bg=self.ACC, pady=6)
+        hdr = tk.Frame(self, bg=self.PANEL, pady=8, highlightthickness=1,
+                       highlightbackground=self.BORDER)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="🎲  VRC イベント抽選ツール",
+        tk.Label(hdr, text="VRC イベント抽選ツール",
                  font=("Yu Gothic UI", 15, "bold"),
-                 bg=self.ACC, fg=self.FG).pack(side="left", padx=14)
-        badge_text = "FREE" if FREE_BUILD else "✦ PRO"
+                 bg=self.PANEL, fg=self.FG).pack(side="left", padx=14)
+        badge_text = "FREE" if FREE_BUILD else "PRO"
         tk.Label(hdr, text=f" {badge_text} ", font=("Yu Gothic UI", 10, "bold"),
                  bg=self.BADGE_BG, fg=self.BADGE_FG,
                  relief="flat", padx=6, pady=2).pack(side="left", padx=4)
         tk.Label(hdr, text=f"v{APP_VERSION}",
-                 font=("Yu Gothic UI", 9), bg=self.ACC, fg=self.FG).pack(side="right", padx=14)
+                 font=("Yu Gothic UI", 9), bg=self.PANEL, fg=self.MUTED).pack(side="right", padx=14)
 
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=(6, 8))
@@ -335,18 +348,18 @@ class VRCRaffleApp(tk.Tk):
         self.tab_players  = ttk.Frame(nb)
         self.tab_help     = ttk.Frame(nb)
 
-        nb.add(self.tab_raffle,   text="  🎰  抽選  ")
+        nb.add(self.tab_raffle,   text="  抽選  ")
 
         if FREE_BUILD:
-            nb.add(self.tab_events,   text="  📁  イベント  🔒  ")
-            nb.add(self.tab_sessions, text="  📋  記録  🔒  ")
-            nb.add(self.tab_players,  text="  👥  参加者  🔒  ")
+            nb.add(self.tab_events,   text="  イベント  LOCK  ")
+            nb.add(self.tab_sessions, text="  記録  LOCK  ")
+            nb.add(self.tab_players,  text="  参加者  LOCK  ")
         else:
-            nb.add(self.tab_events,   text="  📁  イベント  ")
-            nb.add(self.tab_sessions, text="  📋  記録  ")
-            nb.add(self.tab_players,  text="  👥  参加者  ")
+            nb.add(self.tab_events,   text="  イベント  ")
+            nb.add(self.tab_sessions, text="  記録  ")
+            nb.add(self.tab_players,  text="  参加者  ")
 
-        nb.add(self.tab_help,     text="  ❓  ヘルプ  ")
+        nb.add(self.tab_help,     text="  ヘルプ  ")
 
         self._build_raffle_tab()
         self._build_events_tab()
@@ -379,7 +392,7 @@ class VRCRaffleApp(tk.Tk):
         left = ttk.Frame(f, style="Panel.TFrame", padding=16)
         left.grid(row=0, column=0, sticky="nsew", padx=(8, 4), pady=8)
 
-        ttk.Label(left, text="⚙  抽選設定",
+        ttk.Label(left, text="抽選設定",
                   font=("Yu Gothic UI", 11, "bold"),
                   style="Panel.TLabel").pack(anchor="w", pady=(0, 12))
 
@@ -392,7 +405,7 @@ class VRCRaffleApp(tk.Tk):
 
         if FREE_BUILD:
             lk = ttk.Label(left,
-                           text="🔒 イベント管理はPro版限定です",
+                           text="イベント管理はPro版限定です",
                            style="Panel.TLabel",
                            foreground=self.HIGH,
                            font=("Yu Gothic UI", 8))
@@ -433,15 +446,17 @@ class VRCRaffleApp(tk.Tk):
         ttk.Radiobutton(mode_frame,
                         text="線形加重  [1 + 参加回数 / 総人数]",
                         variable=self.mode_var, value="linear",
-                        style="TRadiobutton").pack(anchor="w")
+                        style="TRadiobutton",
+                        command=self._on_raffle_mode_change).pack(anchor="w")
         ttk.Radiobutton(mode_frame,
                         text="指数加重  [参加ごとに確率2倍 × 2ⁿ]",
                         variable=self.mode_var, value="double",
-                        style="TRadiobutton").pack(anchor="w", pady=(4, 0))
+                        style="TRadiobutton",
+                        command=self._on_raffle_mode_change).pack(anchor="w", pady=(4, 0))
 
         if FREE_BUILD:
             ttk.Label(mode_frame,
-                      text="🔒 加重確率はPro版限定です（フリー版は均等抽選）",
+                      text="加重確率はPro版限定です（フリー版は均等抽選）",
                       style="Panel.TLabel",
                       foreground=self.HIGH,
                       font=("Yu Gothic UI", 8)).pack(anchor="w", pady=(4, 0))
@@ -455,15 +470,17 @@ class VRCRaffleApp(tk.Tk):
         ttk.Label(left, text="備考:", style="Panel.TLabel").pack(anchor="w")
         self.notes_text = tk.Text(
             left, height=3,
-            bg="#050010" if not FREE_BUILD else "#06111f",
+            bg=self.FIELD,
             fg=self.FG, insertbackground=self.FG,
             font=("Yu Gothic UI", 9))
         self.notes_text.pack(fill="x", pady=(2, 10))
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Button(left, text="📂  CSVプレビュー",
+        ttk.Button(left, text="CSVプレビュー",
                    command=self._preview_csv).pack(fill="x", pady=2)
-        ttk.Button(left, text="🎲  抽選開始",
+        ttk.Button(left, text="CSVを読込・自動認識",
+                   command=self._load_csv_records).pack(fill="x", pady=2)
+        ttk.Button(left, text="抽選開始",
                    style="Accent.TButton",
                    command=self._run_raffle).pack(fill="x", pady=(6, 2))
 
@@ -473,24 +490,37 @@ class VRCRaffleApp(tk.Tk):
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
 
-        ttk.Label(right, text="🏆  抽選結果",
-                  font=("Yu Gothic UI", 11, "bold")).grid(
-            row=0, column=0, sticky="w", pady=(0, 6))
+        top_right = ttk.Frame(right)
+        top_right.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        ttk.Label(top_right, text="抽選記録",
+                  font=("Yu Gothic UI", 11, "bold")).pack(side="left")
+        ttk.Button(top_right, text="記録編集",
+                   command=self._edit_import_record).pack(side="right", padx=4)
+        ttk.Button(top_right, text="記録削除",
+                   command=self._delete_import_record).pack(side="right", padx=4)
 
-        cols = ("display_name", "vrc_id", "x_id", "join_count", "weight", "matched")
+        cols = (
+            "status", "display_name", "vrc_id", "vrc_url", "x_id", "x_url",
+            "join_count", "win_count", "current_probability", "matched"
+        )
         self.result_tree = ttk.Treeview(right, columns=cols, show="headings", height=20)
         heads = {
+            "status":       "状態",
             "display_name": "名前",
             "vrc_id":       "VRC ID",
+            "vrc_url":      "VRC URL",
             "x_id":         "X ID",
-            "join_count":   "参加履歴",
-            "weight":       "重み",
+            "x_url":        "X URL",
+            "join_count":   "参加回数",
+            "win_count":    "当選回数",
+            "current_probability": "現在確率",
             "matched":      "照合"
         }
-        widths = [160, 160, 130, 80, 80, 60]
+        widths = [70, 130, 130, 150, 110, 150, 70, 70, 90, 60]
         for c, w in zip(cols, widths):
             self.result_tree.heading(c, text=heads[c])
             self.result_tree.column(c, width=w, anchor="center")
+        self.result_tree.bind("<Double-1>", lambda _: self._edit_import_record())
 
         vsb = ttk.Scrollbar(right, orient="vertical", command=self.result_tree.yview)
         self.result_tree.configure(yscrollcommand=vsb.set)
@@ -498,9 +528,9 @@ class VRCRaffleApp(tk.Tk):
         vsb.grid(row=1, column=1, sticky="ns")
 
         self.result_status = ttk.Label(
-            right, text="",
+            right, text="CSVを選択して「CSVを読込・自動認識」を押してください。",
             font=("Yu Gothic UI", 10, "bold"),
-            foreground=self.HIGH)
+            foreground=self.ACC)
         self.result_status.grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         # 初期イベントリスト読み込み
@@ -531,7 +561,7 @@ class VRCRaffleApp(tk.Tk):
 
         ttk.Label(win, text="説明:").grid(row=1, column=0, sticky="ne", padx=10, pady=8)
         desc_t = tk.Text(win, height=3,
-                         bg="#050010", fg=self.FG,
+                         bg=self.FIELD, fg=self.FG,
                          insertbackground=self.FG, font=("Yu Gothic UI", 9))
         desc_t.grid(row=1, column=1, sticky="ew", padx=8)
         win.columnconfigure(1, weight=1)
@@ -555,7 +585,7 @@ class VRCRaffleApp(tk.Tk):
             win.destroy()
             messagebox.showinfo("成功", f"イベント「{n}」を作成しました")
 
-        ttk.Button(win, text="💾  保存", style="Accent.TButton",
+        ttk.Button(win, text="保存", style="Accent.TButton",
                    command=save).grid(row=2, column=0, columnspan=2, pady=10)
 
     def _browse_csv(self):
@@ -600,20 +630,236 @@ class VRCRaffleApp(tk.Tk):
 
         found = [c for c in COLUMN_ALIASES if c in cols]
         ttk.Label(win,
-                  text=f"✅ 認識済みフィールド: {', '.join(found) or '(標準フィールドなし — 列名を確認してください)'}",
-                  foreground=self.HIGH, background=self.BG).grid(
+                  text=f"認識済みフィールド: {', '.join(found) or '(標準フィールドなし — 列名を確認してください)'}",
+                  foreground=self.ACC, background=self.BG).grid(
             row=2, column=0, sticky="w", padx=8, pady=4)
 
-    def _run_raffle(self):
+    def _safe_int(self, value, default=0):
+        if pd.isna(value):
+            return default
+        text = str(value).strip()
+        if not text:
+            return default
+        try:
+            return int(float(text))
+        except ValueError:
+            return default
+
+    def _record_display_name(self, record):
+        return (
+            record.get("display_name")
+            or record.get("vrc_id")
+            or record.get("x_id")
+            or "unknown"
+        )
+
+    def _load_csv_records(self):
         path = self.csv_path_var.get()
         if not path or not os.path.exists(path):
             messagebox.showerror("エラー", "有効なCSV/Excelファイルを選択してください")
             return
-
         try:
             df = load_csv_or_excel(path)
         except Exception as e:
             messagebox.showerror("読み込み失敗", str(e))
+            return
+
+        conn = sqlite3.connect(db_path())
+        records = []
+        has_join_count = "join_count" in df.columns
+        has_win_count = "win_count" in df.columns
+        for _, row in df.iterrows():
+            record = {
+                "display_name": str(row.get("display_name", "") or "").strip(),
+                "vrc_id": str(row.get("vrc_id", "") or "").strip(),
+                "vrc_url": str(row.get("vrc_url", "") or "").strip(),
+                "x_id": str(row.get("x_id", "") or "").strip(),
+                "x_url": str(row.get("x_url", "") or "").strip(),
+                "join_count": self._safe_int(row.get("join_count", 0)),
+                "win_count": self._safe_int(row.get("win_count", 0)),
+                "current_probability": str(row.get("current_probability", "") or "").strip(),
+                "raw_data": json.dumps({k: str(v) for k, v in row.items()}, ensure_ascii=False),
+                "participant_id": None,
+                "matched": False,
+            }
+            if not any(record.get(k) for k in ("display_name", "vrc_id", "vrc_url", "x_id", "x_url")):
+                continue
+
+            p, _ = fuzzy_find_participant(
+                conn, record["vrc_id"], record["vrc_url"], record["x_id"], record["x_url"])
+            if p:
+                record["participant_id"] = p["id"]
+                record["matched"] = True
+                if not record["display_name"]:
+                    record["display_name"] = p.get("display_name", "")
+                if not has_join_count:
+                    record["join_count"] = p.get("join_count", 0)
+                if not has_win_count:
+                    record["win_count"] = p.get("win_count", 0)
+
+            record["display_name"] = self._record_display_name(record)
+            records.append(record)
+        conn.close()
+
+        self.imported_records = records
+        self.last_winner_indices = set()
+        self._recalculate_record_probabilities()
+        self._refresh_import_tree()
+
+        found = [c for c in COLUMN_ALIASES if c in df.columns]
+        self.result_status.config(
+            text=f"{len(records)}件の記録を読み込みました。認識済み: {', '.join(found) or 'なし'}")
+
+    def _on_raffle_mode_change(self):
+        if self.imported_records:
+            self._recalculate_record_probabilities()
+            self._refresh_import_tree()
+
+    def _recalculate_record_probabilities(self):
+        if not self.imported_records:
+            return []
+        mode = "equal" if FREE_BUILD else self.mode_var.get()
+        total = len(self.imported_records)
+        if mode == "equal":
+            weights = [1.0] * total
+        else:
+            weights = calc_weights(self.imported_records, mode, total)
+
+        total_weight = sum(weights) or 1.0
+        for record, weight in zip(self.imported_records, weights):
+            record["weight"] = weight
+            record["current_probability"] = f"{(weight / total_weight) * 100:.2f}%"
+        return weights
+
+    def _refresh_import_tree(self):
+        self.result_tree.delete(*self.result_tree.get_children())
+        self.result_tree.tag_configure("winner", background="#eff6ff", foreground=self.FG)
+        for idx, record in enumerate(self.imported_records):
+            is_winner = idx in self.last_winner_indices
+            self.result_tree.insert("", "end", iid=str(idx),
+                                    tags=("winner",) if is_winner else (),
+                                    values=(
+                                        "当選" if is_winner else "待機",
+                                        record.get("display_name", ""),
+                                        record.get("vrc_id", ""),
+                                        record.get("vrc_url", ""),
+                                        record.get("x_id", ""),
+                                        record.get("x_url", ""),
+                                        record.get("join_count", 0),
+                                        record.get("win_count", 0),
+                                        record.get("current_probability", ""),
+                                        "既存" if record.get("matched") else "新規",
+                                    ))
+
+    def _get_selected_import_index(self):
+        sel = self.result_tree.selection()
+        if not sel:
+            messagebox.showinfo("ヒント", "編集する記録を選択してください")
+            return None
+        try:
+            return int(sel[0])
+        except ValueError:
+            return None
+
+    def _edit_import_record(self):
+        idx = self._get_selected_import_index()
+        if idx is None or idx >= len(self.imported_records):
+            return
+        record = self.imported_records[idx]
+
+        win = tk.Toplevel(self)
+        win.title(f"抽選記録編集 #{idx + 1}")
+        win.configure(bg=self.BG)
+        win.geometry("430x360")
+        win.grab_set()
+
+        fields = [
+            ("display_name", "名前"),
+            ("vrc_id", "VRC ID"),
+            ("vrc_url", "VRC URL"),
+            ("x_id", "X ID"),
+            ("x_url", "X URL"),
+            ("join_count", "参加回数"),
+            ("win_count", "当選回数"),
+        ]
+        vars_ = {}
+        for row_idx, (field, label) in enumerate(fields):
+            ttk.Label(win, text=label + ":").grid(row=row_idx, column=0, sticky="e", padx=10, pady=5)
+            v = tk.StringVar(value=str(record.get(field, "")))
+            ttk.Entry(win, textvariable=v, width=34).grid(row=row_idx, column=1, sticky="ew", padx=8)
+            vars_[field] = v
+        win.columnconfigure(1, weight=1)
+
+        def save():
+            try:
+                join_count = int(vars_["join_count"].get() or 0)
+                win_count = int(vars_["win_count"].get() or 0)
+            except ValueError:
+                messagebox.showerror("形式エラー", "参加回数・当選回数は整数で入力してください", parent=win)
+                return
+
+            for field, _ in fields:
+                if field in ("join_count", "win_count"):
+                    continue
+                record[field] = vars_[field].get().strip()
+            record["join_count"] = join_count
+            record["win_count"] = win_count
+            record["display_name"] = self._record_display_name(record)
+            record["raw_data"] = json.dumps(
+                {field: record.get(field, "") for field, _ in fields},
+                ensure_ascii=False)
+
+            self._recalculate_record_probabilities()
+            self._refresh_import_tree()
+            win.destroy()
+
+        ttk.Button(win, text="保存", style="Accent.TButton",
+                   command=save).grid(row=len(fields), column=0, columnspan=2, pady=14)
+
+    def _delete_import_record(self):
+        idx = self._get_selected_import_index()
+        if idx is None or idx >= len(self.imported_records):
+            return
+        if not messagebox.askyesno("確認", "選択した抽選記録を削除しますか？"):
+            return
+        self.imported_records.pop(idx)
+        self.last_winner_indices = set()
+        self._recalculate_record_probabilities()
+        self._refresh_import_tree()
+        self.result_status.config(text=f"{len(self.imported_records)}件の記録があります。")
+
+    def _save_participant_from_record(self, conn, record):
+        now = datetime.datetime.now().isoformat()
+        participant_id = record.get("participant_id")
+        values = (
+            record.get("vrc_id", ""),
+            record.get("vrc_url", ""),
+            record.get("x_id", ""),
+            record.get("x_url", ""),
+            self._record_display_name(record),
+            record.get("join_count", 0),
+            record.get("win_count", 0),
+        )
+        if participant_id:
+            conn.execute(
+                "UPDATE participants SET vrc_id=?,vrc_url=?,x_id=?,x_url=?,"
+                "display_name=?,join_count=?,win_count=? WHERE id=?",
+                (*values, participant_id))
+            return participant_id
+
+        cur = conn.execute(
+            "INSERT INTO participants "
+            "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (*values, now))
+        record["participant_id"] = cur.lastrowid
+        record["matched"] = False
+        return cur.lastrowid
+
+    def _run_raffle(self):
+        if not self.imported_records:
+            self._load_csv_records()
+        if not self.imported_records:
             return
 
         draw_count   = self.draw_count_var.get()
@@ -630,51 +876,7 @@ class VRCRaffleApp(tk.Tk):
             ev_key = self.raffle_event_var.get()
             event_id = self._event_map.get(ev_key)
 
-        conn = sqlite3.connect(db_path())
-
-        # ── 参加者マッチング ──
-        enriched = []
-        for _, row in df.iterrows():
-            vrc_id  = str(row.get("vrc_id",  "") or "").strip()
-            vrc_url = str(row.get("vrc_url", "") or "").strip()
-            x_id    = str(row.get("x_id",    "") or "").strip()
-            x_url   = str(row.get("x_url",   "") or "").strip()
-            dname   = str(row.get("display_name", "") or "").strip()
-            raw_str = json.dumps(
-                {k: str(v) for k, v in row.items()}, ensure_ascii=False)
-
-            p, _ = fuzzy_find_participant(conn, vrc_id, vrc_url, x_id, x_url)
-
-            if p:
-                conn.execute(
-                    "UPDATE participants SET join_count=join_count+1 WHERE id=?",
-                    (p["id"],))
-                p = dict(p)
-                p["join_count"] += 1
-                p["matched"] = True
-            else:
-                now = datetime.datetime.now().isoformat()
-                cur = conn.execute(
-                    "INSERT INTO participants "
-                    "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,created_at)"
-                    " VALUES (?,?,?,?,?,1,0,?)",
-                    (vrc_id, vrc_url, x_id, x_url,
-                     dname or vrc_id or x_id or "unknown", now))
-                p = {"id": cur.lastrowid, "vrc_id": vrc_id, "vrc_url": vrc_url,
-                     "x_id": x_id, "x_url": x_url,
-                     "display_name": dname or vrc_id or x_id or "unknown",
-                     "join_count": 1, "win_count": 0, "matched": False}
-
-            enriched.append((p, raw_str))
-
-        conn.commit()
-
-        if not enriched:
-            conn.close()
-            messagebox.showerror("エラー", "CSVに有効なデータがありません")
-            return
-
-        total = len(enriched)
+        total = len(self.imported_records)
         if draw_count > total and not allow_rep:
             draw_count = total
             messagebox.showwarning(
@@ -685,7 +887,11 @@ class VRCRaffleApp(tk.Tk):
         if mode == "equal":
             weights = [1.0] * total
         else:
-            weights = calc_weights([p for p, _ in enriched], mode, total)
+            weights = calc_weights(self.imported_records, mode, total)
+        total_weight = sum(weights) or 1.0
+        for record, weight in zip(self.imported_records, weights):
+            record["weight"] = weight
+            record["current_probability"] = f"{(weight / total_weight) * 100:.2f}%"
 
         # ── 加重抽選 ──
         pool_idx  = list(range(total))
@@ -710,55 +916,54 @@ class VRCRaffleApp(tk.Tk):
 
         # ── セッション保存 ──
         now_str = datetime.datetime.now().isoformat()
+        conn = sqlite3.connect(db_path())
         cur = conn.execute(
             "INSERT INTO raffle_sessions "
             "(event_id,session_name,csv_file,mode,draw_count,created_at,notes)"
             " VALUES (?,?,?,?,?,?,?)",
-            (event_id, session_name, os.path.basename(path),
+            (event_id, session_name, os.path.basename(self.csv_path_var.get()),
              mode, draw_count, now_str, notes))
         session_id = cur.lastrowid
 
         # 提出レコード
-        for _, (p, raw_str) in enumerate(enriched):
+        participant_ids = []
+        for record in self.imported_records:
+            participant_id = self._save_participant_from_record(conn, record)
+            participant_ids.append(participant_id)
+            record["join_count"] = record.get("join_count", 0) + 1
+            conn.execute(
+                "UPDATE participants SET join_count=join_count+1 WHERE id=?",
+                (participant_id,))
             conn.execute(
                 "INSERT INTO submission_records "
                 "(session_id,raw_data,matched_participant_id,created_at)"
                 " VALUES (?,?,?,?)",
-                (session_id, raw_str, p["id"], now_str))
+                (session_id, record.get("raw_data", json.dumps(record, ensure_ascii=False)),
+                 participant_id, now_str))
 
         # 当選レコード
         for wi in winners_idx:
-            p = enriched[wi][0]
+            record = self.imported_records[wi]
+            participant_id = participant_ids[wi]
             conn.execute(
                 "INSERT INTO raffle_results "
                 "(session_id,participant_id,display_name,vrc_id,vrc_url,x_id,x_url,is_winner)"
                 " VALUES (?,?,?,?,?,?,?,1)",
-                (session_id, p["id"], p["display_name"],
-                 p["vrc_id"], p["vrc_url"], p["x_id"], p["x_url"]))
+                (session_id, participant_id, self._record_display_name(record),
+                 record.get("vrc_id", ""), record.get("vrc_url", ""),
+                 record.get("x_id", ""), record.get("x_url", "")))
+            record["win_count"] = record.get("win_count", 0) + 1
             conn.execute(
                 "UPDATE participants SET win_count=win_count+1 WHERE id=?",
-                (p["id"],))
+                (participant_id,))
 
         conn.commit()
         conn.close()
 
         # ── 結果表示 ──
-        self.result_tree.delete(*self.result_tree.get_children())
-        for wi in winners_idx:
-            p, _ = enriched[wi]
-            w = weights[wi]
-            self.result_tree.insert("", "end", tags=("winner",), values=(
-                p["display_name"],
-                p["vrc_id"],
-                p["x_id"],
-                p["join_count"],
-                "—" if mode == "equal" else f"{w:.3f}",
-                "✅" if p.get("matched") else "🆕"
-            ))
-        self.result_tree.tag_configure(
-            "winner",
-            background="#1a2e1a" if not FREE_BUILD else "#0e2030",
-            foreground="#88ff88")
+        self.last_winner_indices = set(winners_idx)
+        self._recalculate_record_probabilities()
+        self._refresh_import_tree()
 
         mode_label = {
             "equal":  "均等抽選（フリー版）",
@@ -767,7 +972,7 @@ class VRCRaffleApp(tk.Tk):
         }.get(mode, mode)
 
         self.result_status.config(
-            text=(f"🎉 抽選完了！  {total}人中 {len(winners_idx)}名当選  "
+            text=(f"抽選完了: Session #{session_id} | {total}人中 {len(winners_idx)}名当選  "
                   f"|  モード: {mode_label}"))
 
         if not FREE_BUILD:
@@ -789,12 +994,12 @@ class VRCRaffleApp(tk.Tk):
 
         top = ttk.Frame(f, padding=(8, 6, 8, 0))
         top.grid(row=0, column=0, sticky="ew")
-        ttk.Label(top, text="📁  イベント一覧",
+        ttk.Label(top, text="イベント一覧",
                   font=("Yu Gothic UI", 11, "bold")).pack(side="left")
-        ttk.Button(top, text="🔄 更新",    command=self._load_events).pack(side="right", padx=4)
-        ttk.Button(top, text="🗑 削除",    command=self._delete_event).pack(side="right", padx=4)
-        ttk.Button(top, text="✏ 編集",    command=self._edit_event).pack(side="right", padx=4)
-        ttk.Button(top, text="➕ 新規作成", command=self._new_event).pack(side="right", padx=4)
+        ttk.Button(top, text="更新",    command=self._load_events).pack(side="right", padx=4)
+        ttk.Button(top, text="削除",    command=self._delete_event).pack(side="right", padx=4)
+        ttk.Button(top, text="編集",    command=self._edit_event).pack(side="right", padx=4)
+        ttk.Button(top, text="新規作成", command=self._new_event).pack(side="right", padx=4)
 
         # イベント一覧 Treeview
         cols = ("id", "name", "description", "session_count", "created_at")
@@ -816,7 +1021,7 @@ class VRCRaffleApp(tk.Tk):
 
         btn_f = ttk.Frame(f, padding=(8, 2))
         btn_f.grid(row=3, column=0, sticky="ew")
-        ttk.Button(btn_f, text="📋  このイベントのセッション一覧を表示",
+        ttk.Button(btn_f, text="このイベントのセッション一覧を表示",
                    command=self._view_event_sessions).pack(side="left", padx=4)
 
         self._load_events()
@@ -825,9 +1030,9 @@ class VRCRaffleApp(tk.Tk):
         lf = ttk.Frame(parent)
         lf.pack(expand=True, fill="both")
         tk.Label(lf,
-                 text=f"🔒\n\n{feature_name}\n\nこの機能はPro版でのみご利用いただけます。",
+                 text=f"{feature_name}\n\nこの機能はPro版でのみご利用いただけます。",
                  font=("Yu Gothic UI", 14),
-                 bg=self.BG, fg=self.HIGH,
+                 bg=self.BG, fg=self.ACC,
                  justify="center").pack(expand=True)
 
     def _load_events(self):
@@ -880,7 +1085,7 @@ class VRCRaffleApp(tk.Tk):
 
         ttk.Label(win, text="説明:").grid(row=1, column=0, sticky="ne", padx=10, pady=8)
         desc_t = tk.Text(win, height=4,
-                         bg="#050010", fg=self.FG,
+                         bg=self.FIELD, fg=self.FG,
                          insertbackground=self.FG, font=("Yu Gothic UI", 9))
         desc_t.grid(row=1, column=1, sticky="ew", padx=8)
         if not is_new and data.get("description"):
@@ -908,7 +1113,7 @@ class VRCRaffleApp(tk.Tk):
             win.destroy()
             messagebox.showinfo("成功", "イベントを保存しました")
 
-        ttk.Button(win, text="💾  保存", style="Accent.TButton",
+        ttk.Button(win, text="保存", style="Accent.TButton",
                    command=save).grid(row=2, column=0, columnspan=2, pady=10)
 
     def _delete_event(self):
@@ -974,7 +1179,7 @@ class VRCRaffleApp(tk.Tk):
             self._open_results_window(sid)
 
         bf = ttk.Frame(win); bf.grid(row=1, column=0, sticky="ew", pady=4)
-        ttk.Button(bf, text="📄 結果を表示", command=view_results).pack(side="left", padx=8)
+        ttk.Button(bf, text="結果を表示", command=view_results).pack(side="left", padx=8)
 
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -991,12 +1196,12 @@ class VRCRaffleApp(tk.Tk):
 
         top = ttk.Frame(f, padding=(8, 6, 8, 0))
         top.grid(row=0, column=0, sticky="ew")
-        ttk.Label(top, text="📋  抽選セッション一覧",
+        ttk.Label(top, text="抽選セッション一覧",
                   font=("Yu Gothic UI", 11, "bold")).pack(side="left")
-        ttk.Button(top, text="🔄 更新",       command=self._load_sessions).pack(side="right", padx=4)
-        ttk.Button(top, text="🗑 削除",       command=self._delete_session).pack(side="right", padx=4)
-        ttk.Button(top, text="✏ 編集",       command=self._edit_session).pack(side="right", padx=4)
-        ttk.Button(top, text="📄 結果を表示", command=self._view_session_results).pack(side="right", padx=4)
+        ttk.Button(top, text="更新",       command=self._load_sessions).pack(side="right", padx=4)
+        ttk.Button(top, text="削除",       command=self._delete_session).pack(side="right", padx=4)
+        ttk.Button(top, text="編集",       command=self._edit_session).pack(side="right", padx=4)
+        ttk.Button(top, text="結果を表示", command=self._view_session_results).pack(side="right", padx=4)
 
         # イベントフィルター
         filter_f = ttk.Frame(f, padding=(8, 2))
@@ -1104,8 +1309,8 @@ class VRCRaffleApp(tk.Tk):
             tag = "win" if row[-1] == 1 else ""
             tree.insert("", "end", values=row, tags=(tag,))
         tree.tag_configure("win",
-                           background="#1a2e1a",
-                           foreground="#88ff88")
+                           background="#eff6ff",
+                           foreground=self.FG)
 
         vsb = ttk.Scrollbar(win, orient="vertical",   command=tree.yview)
         hsb = ttk.Scrollbar(win, orient="horizontal", command=tree.xview)
@@ -1116,9 +1321,9 @@ class VRCRaffleApp(tk.Tk):
         win.rowconfigure(0, weight=1); win.columnconfigure(0, weight=1)
 
         bf = ttk.Frame(win); bf.grid(row=2, column=0, sticky="ew", pady=4)
-        ttk.Button(bf, text="✏ 編集",
+        ttk.Button(bf, text="編集",
                    command=lambda: self._edit_result_entry(tree, sid)).pack(side="left", padx=8)
-        ttk.Button(bf, text="🗑 削除",
+        ttk.Button(bf, text="削除",
                    command=lambda: self._delete_result_entry(tree)).pack(side="left")
 
     def _edit_result_entry(self, tree, session_id):
@@ -1159,7 +1364,7 @@ class VRCRaffleApp(tk.Tk):
             win.destroy()
             messagebox.showinfo("成功", "結果を更新しました")
 
-        ttk.Button(win, text="💾 保存", style="Accent.TButton",
+        ttk.Button(win, text="保存", style="Accent.TButton",
                    command=save).grid(row=len(fields), column=0, columnspan=2, pady=12)
 
     def _delete_result_entry(self, tree):
@@ -1193,7 +1398,7 @@ class VRCRaffleApp(tk.Tk):
 
         ttk.Label(win, text="備考:").grid(row=1, column=0, sticky="ne", padx=8, pady=8)
         notes_t = tk.Text(win, height=4,
-                          bg="#050010", fg=self.FG,
+                          bg=self.FIELD, fg=self.FG,
                           insertbackground=self.FG, font=("Yu Gothic UI", 9))
         notes_t.grid(row=1, column=1, sticky="ew", padx=8)
         notes_t.insert("1.0", row[1] or "")
@@ -1209,7 +1414,7 @@ class VRCRaffleApp(tk.Tk):
             win.destroy()
             messagebox.showinfo("成功", "セッションを更新しました")
 
-        ttk.Button(win, text="💾 保存", style="Accent.TButton",
+        ttk.Button(win, text="保存", style="Accent.TButton",
                    command=save).grid(row=2, column=0, columnspan=2, pady=10)
 
     def _delete_session(self):
@@ -1242,23 +1447,23 @@ class VRCRaffleApp(tk.Tk):
 
         top = ttk.Frame(f, padding=(8, 6, 8, 0))
         top.grid(row=0, column=0, sticky="ew")
-        ttk.Label(top, text="👥  参加者データベース",
+        ttk.Label(top, text="参加者データベース",
                   font=("Yu Gothic UI", 11, "bold")).pack(side="left")
-        ttk.Button(top, text="🔄 更新",     command=self._load_players).pack(side="right", padx=4)
-        ttk.Button(top, text="🗑 削除",     command=self._delete_player).pack(side="right", padx=4)
-        ttk.Button(top, text="✏ 編集",     command=self._edit_player).pack(side="right", padx=4)
-        ttk.Button(top, text="➕ 手動追加", command=self._add_player).pack(side="right", padx=4)
+        ttk.Button(top, text="更新",     command=self._load_players).pack(side="right", padx=4)
+        ttk.Button(top, text="削除",     command=self._delete_player).pack(side="right", padx=4)
+        ttk.Button(top, text="編集",     command=self._edit_player).pack(side="right", padx=4)
+        ttk.Button(top, text="手動追加", command=self._add_player).pack(side="right", padx=4)
 
         # 検索バー
         sf = ttk.Frame(f, padding=(8, 2))
         sf.grid(row=2, column=0, sticky="ew")
-        ttk.Label(sf, text="🔍 検索:").pack(side="left")
+        ttk.Label(sf, text="検索:").pack(side="left")
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._load_players())
         ttk.Entry(sf, textvariable=self.search_var, width=32).pack(side="left", padx=4)
         ttk.Label(sf, text="（名前 / VRC ID / X ID で検索）",
                   font=("Yu Gothic UI", 8),
-                  foreground=self.HIGH).pack(side="left")
+                  foreground=self.MUTED).pack(side="left")
 
         cols = ("id","display_name","vrc_id","vrc_url","x_id","x_url",
                 "join_count","win_count","created_at")
@@ -1379,7 +1584,7 @@ class VRCRaffleApp(tk.Tk):
             win.destroy()
             messagebox.showinfo("成功", "参加者を保存しました")
 
-        ttk.Button(win, text="💾 保存", style="Accent.TButton",
+        ttk.Button(win, text="保存", style="Accent.TButton",
                    command=save).grid(row=len(fields), column=0, columnspan=2, pady=12)
 
     def _delete_player(self):
@@ -1403,7 +1608,7 @@ class VRCRaffleApp(tk.Tk):
         f.rowconfigure(0, weight=1)
         f.columnconfigure(0, weight=1)
 
-        text = tk.Text(f, bg="#080015" if not FREE_BUILD else "#07121f",
+        text = tk.Text(f, bg=self.FIELD,
                        fg=self.FG, font=("Yu Gothic UI", 10),
                        wrap="word", padx=18, pady=14, relief="flat")
         text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
@@ -1414,11 +1619,11 @@ class VRCRaffleApp(tk.Tk):
         edition = "フリー版" if FREE_BUILD else "Pro版"
         free_limits = """
 【フリー版の制限】
-  ・ 抽選機能: ✅ 均等確率の1回抽選のみ利用可能
-  ・ 加重確率モード: 🔒 Pro版限定
-  ・ イベント管理:   🔒 Pro版限定
-  ・ セッション記録: 🔒 Pro版限定
-  ・ 参加者データベース: 🔒 Pro版限定
+  ・ 抽選機能: 均等確率の1回抽選のみ利用可能
+  ・ 加重確率モード: Pro版限定
+  ・ イベント管理:   Pro版限定
+  ・ セッション記録: Pro版限定
+  ・ 参加者データベース: Pro版限定
 
 """ if FREE_BUILD else """
 【Pro版の全機能】
