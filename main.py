@@ -104,6 +104,9 @@ def init_db():
             FOREIGN KEY (session_id) REFERENCES raffle_sessions(id)
         )
     """)
+    result_cols = [r[1] for r in c.execute("PRAGMA table_info(raffle_results)").fetchall()]
+    if "extra_display_json" not in result_cols:
+        c.execute("ALTER TABLE raffle_results ADD COLUMN extra_display_json TEXT")
 
     # 提出レコード
     c.execute("""
@@ -162,10 +165,11 @@ def calc_weights(participants_info: list, mode: str, total: int) -> list:
     weights = []
     for p in participants_info:
         jc = p.get("join_count", 0)
+        wc = p.get("win_count", 0)
         if mode == "linear":
-            w = 1.0 + (jc / max(total, 1))
+            w = (1.0 + (jc / max(total, 1))) / (1.0 + wc)
         else:
-            w = 2.0 ** jc
+            w = 2.0 ** max(jc - wc, 0)
         weights.append(w)
     return weights
 
@@ -214,6 +218,162 @@ def load_csv_or_excel(path: str) -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  CSV 列選択テーブル
+# ─────────────────────────────────────────────────────────────────────────────
+class CsvColumnTable(ttk.Frame):
+    def __init__(self, parent, on_left_click=None, on_right_click=None,
+                 on_double_click=None):
+        super().__init__(parent)
+        self.on_left_click = on_left_click
+        self.on_right_click = on_right_click
+        self.on_double_click = on_double_click
+        self.columns = []
+        self.rows = []
+        self.source_columns = set()
+        self.id_column = None
+        self.display_columns = []
+        self.winner_indices = set()
+        self.selected_row = None
+        self.col_widths = []
+        self.header_h = 34
+        self.row_h = 28
+
+        self.canvas = tk.Canvas(
+            self, bg="#ffffff", highlightthickness=1,
+            highlightbackground="#bfdbfe")
+        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.hsb = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.vsb.grid(row=0, column=1, sticky="ns")
+        self.hsb.grid(row=1, column=0, sticky="ew")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.canvas.bind("<Button-1>", self._handle_left_click)
+        self.canvas.bind("<Button-3>", self._handle_right_click)
+        self.canvas.bind("<Button-2>", self._handle_right_click)
+        self.canvas.bind("<Double-1>", self._handle_double_click)
+
+    def set_data(self, columns, rows, source_columns=None, id_column=None,
+                 display_columns=None, winner_indices=None):
+        self.columns = list(columns)
+        self.rows = list(rows)
+        self.source_columns = set(source_columns or self.columns)
+        self.id_column = id_column
+        self.display_columns = list(display_columns or [])
+        self.winner_indices = set(winner_indices or set())
+        if self.selected_row is not None and self.selected_row >= len(self.rows):
+            self.selected_row = None
+        self._draw()
+
+    def selection(self):
+        if self.selected_row is None:
+            return ()
+        return (str(self.selected_row),)
+
+    def _column_width(self, col, values):
+        texts = [str(col)] + [str(v) for v in values[:80]]
+        width = max(110, min(240, max(len(t) for t in texts) * 9 + 28))
+        return width
+
+    def _draw(self):
+        self.canvas.delete("all")
+        self.col_widths = []
+        for idx, col in enumerate(self.columns):
+            values = [row[idx] if idx < len(row) else "" for row in self.rows]
+            self.col_widths.append(self._column_width(col, values))
+
+        total_w = sum(self.col_widths)
+        total_h = self.header_h + len(self.rows) * self.row_h
+        self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
+
+        x = 0
+        for idx, col in enumerate(self.columns):
+            w = self.col_widths[idx]
+            fill = "#eaf2ff"
+            title = col
+            if col == self.id_column:
+                fill = "#2563eb"
+                title = f"{col}  [抽選ID]"
+            elif col in self.display_columns:
+                fill = "#22c55e"
+                title = f"{col}  [展示列]"
+            self.canvas.create_rectangle(
+                x, 0, x + w, self.header_h, fill=fill, outline="#bfdbfe")
+            self.canvas.create_text(
+                x + 8, self.header_h / 2, anchor="w", text=title,
+                fill="#ffffff" if fill in ("#2563eb", "#22c55e") else "#172554",
+                font=("Yu Gothic UI", 9, "bold"))
+            x += w
+
+        for row_idx, row in enumerate(self.rows):
+            y1 = self.header_h + row_idx * self.row_h
+            y2 = y1 + self.row_h
+            x = 0
+            for col_idx, col in enumerate(self.columns):
+                w = self.col_widths[col_idx]
+                fill = "#ffffff"
+                if row_idx == self.selected_row:
+                    fill = "#eff6ff"
+                if row_idx in self.winner_indices:
+                    fill = "#dbeafe"
+                if col == self.id_column:
+                    fill = "#dbeafe"
+                elif col in self.display_columns:
+                    fill = "#dcfce7"
+                value = row[col_idx] if col_idx < len(row) else ""
+                self.canvas.create_rectangle(
+                    x, y1, x + w, y2, fill=fill, outline="#e2e8f0")
+                self.canvas.create_text(
+                    x + 8, y1 + self.row_h / 2, anchor="w", text=str(value),
+                    fill="#172554", font=("Yu Gothic UI", 9),
+                    width=max(w - 16, 20))
+                x += w
+
+    def _hit_test(self, event):
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        col_idx = None
+        cursor = 0
+        for idx, width in enumerate(self.col_widths):
+            if cursor <= x < cursor + width:
+                col_idx = idx
+                break
+            cursor += width
+        row_idx = None
+        if y >= self.header_h:
+            row_idx = int((y - self.header_h) // self.row_h)
+            if row_idx < 0 or row_idx >= len(self.rows):
+                row_idx = None
+        col = self.columns[col_idx] if col_idx is not None else None
+        return row_idx, col
+
+    def _select_row(self, row_idx):
+        if row_idx is not None:
+            self.selected_row = row_idx
+            self._draw()
+
+    def _handle_left_click(self, event):
+        row_idx, col = self._hit_test(event)
+        self._select_row(row_idx)
+        if col and col in self.source_columns and self.on_left_click:
+            self.on_left_click(col)
+
+    def _handle_right_click(self, event):
+        row_idx, col = self._hit_test(event)
+        self._select_row(row_idx)
+        if col and col in self.source_columns and self.on_right_click:
+            self.on_right_click(col)
+
+    def _handle_double_click(self, event):
+        row_idx, _ = self._hit_test(event)
+        self._select_row(row_idx)
+        if self.on_double_click:
+            self.on_double_click()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Pro 機能ガード デコレータ
 # ─────────────────────────────────────────────────────────────────────────────
 def pro_only(func):
@@ -244,6 +404,9 @@ class VRCRaffleApp(tk.Tk):
         self._sort_rev = True
         self._players_sort_rev = True
         self.imported_records = []
+        self.import_source_columns = []
+        self.import_id_column = None
+        self.import_display_columns = []
         self.last_winner_indices = set()
         self._apply_style()
         self._build_ui()
@@ -444,12 +607,12 @@ class VRCRaffleApp(tk.Tk):
                   font=("Yu Gothic UI", 9, "bold")).pack(anchor="w", pady=(0, 4))
         self.mode_var = tk.StringVar(value="linear")
         ttk.Radiobutton(mode_frame,
-                        text="線形加重  [1 + 参加回数 / 総人数]",
+                        text="線形加重  [(1 + 参加回数 / 総人数) / (1 + 当選回数)]",
                         variable=self.mode_var, value="linear",
                         style="TRadiobutton",
                         command=self._on_raffle_mode_change).pack(anchor="w")
         ttk.Radiobutton(mode_frame,
-                        text="指数加重  [参加ごとに確率2倍 × 2ⁿ]",
+                        text="指数加重  [2 ^ max(参加回数 - 当選回数, 0)]",
                         variable=self.mode_var, value="double",
                         style="TRadiobutton",
                         command=self._on_raffle_mode_change).pack(anchor="w", pady=(4, 0))
@@ -499,33 +662,12 @@ class VRCRaffleApp(tk.Tk):
         ttk.Button(top_right, text="記録削除",
                    command=self._delete_import_record).pack(side="right", padx=4)
 
-        cols = (
-            "status", "display_name", "vrc_id", "vrc_url", "x_id", "x_url",
-            "join_count", "win_count", "current_probability", "matched"
-        )
-        self.result_tree = ttk.Treeview(right, columns=cols, show="headings", height=20)
-        heads = {
-            "status":       "状態",
-            "display_name": "名前",
-            "vrc_id":       "VRC ID",
-            "vrc_url":      "VRC URL",
-            "x_id":         "X ID",
-            "x_url":        "X URL",
-            "join_count":   "参加回数",
-            "win_count":    "当選回数",
-            "current_probability": "現在確率",
-            "matched":      "照合"
-        }
-        widths = [70, 130, 130, 150, 110, 150, 70, 70, 90, 60]
-        for c, w in zip(cols, widths):
-            self.result_tree.heading(c, text=heads[c])
-            self.result_tree.column(c, width=w, anchor="center")
-        self.result_tree.bind("<Double-1>", lambda _: self._edit_import_record())
-
-        vsb = ttk.Scrollbar(right, orient="vertical", command=self.result_tree.yview)
-        self.result_tree.configure(yscrollcommand=vsb.set)
-        self.result_tree.grid(row=1, column=0, sticky="nsew")
-        vsb.grid(row=1, column=1, sticky="ns")
+        self.result_table = CsvColumnTable(
+            right,
+            on_left_click=self._on_import_column_left_click,
+            on_right_click=self._on_import_column_right_click,
+            on_double_click=self._edit_import_record)
+        self.result_table.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
         self.result_status = ttk.Label(
             right, text="CSVを選択して「CSVを読込・自動認識」を押してください。",
@@ -647,11 +789,78 @@ class VRCRaffleApp(tk.Tk):
 
     def _record_display_name(self, record):
         return (
-            record.get("display_name")
+            record.get("draw_id")
+            or record.get("display_name")
             or record.get("vrc_id")
             or record.get("x_id")
             or "unknown"
         )
+
+    def _raw_cell_text(self, row, column):
+        value = row.get(column, "")
+        if pd.isna(value):
+            return ""
+        return str(value).strip()
+
+    def _apply_import_column_roles(self):
+        if not self.imported_records:
+            return
+        for record in self.imported_records:
+            raw = record.get("raw_values", {})
+            draw_id = raw.get(self.import_id_column, "") if self.import_id_column else ""
+            record["draw_id"] = draw_id
+            record["display_fields"] = {
+                col: raw.get(col, "") for col in self.import_display_columns
+            }
+            if draw_id:
+                record["display_name"] = draw_id
+            else:
+                record["display_name"] = (
+                    record.get("base_display_name")
+                    or record.get("vrc_id")
+                    or record.get("x_id")
+                    or "unknown"
+                )
+            record["raw_data"] = json.dumps({
+                "raw_values": raw,
+                "draw_id_column": self.import_id_column,
+                "display_columns": self.import_display_columns,
+            }, ensure_ascii=False)
+
+    def _on_import_column_left_click(self, column):
+        if not self.imported_records:
+            return
+        if self.import_id_column is None or column == self.import_id_column:
+            self.import_id_column = column
+            if column in self.import_display_columns:
+                self.import_display_columns.remove(column)
+            hint = f"抽選ID列: {column}。次に左クリックした他の列は展示列になります。"
+        else:
+            if column not in self.import_display_columns:
+                self.import_display_columns.append(column)
+            hint = f"展示列: {', '.join(self.import_display_columns)}。結果表に表示されます。"
+        self._apply_import_column_roles()
+        self._refresh_import_tree()
+        self.result_status.config(text=hint)
+
+    def _on_import_column_right_click(self, column):
+        if not self.imported_records:
+            return
+        changed = False
+        if column == self.import_id_column:
+            self.import_id_column = None
+            changed = True
+        if column in self.import_display_columns:
+            self.import_display_columns.remove(column)
+            changed = True
+        if not changed:
+            return
+        self._apply_import_column_roles()
+        self._refresh_import_tree()
+        id_hint = self.import_id_column or "未指定"
+        display_hint = ", ".join(self.import_display_columns) or "なし"
+        self.result_status.config(
+            text=f"列指定を取消しました。抽選ID: {id_hint} / 展示列: {display_hint}")
 
     def _load_csv_records(self):
         path = self.csv_path_var.get()
@@ -666,11 +875,16 @@ class VRCRaffleApp(tk.Tk):
 
         conn = sqlite3.connect(db_path())
         records = []
+        self.import_source_columns = list(df.columns)
+        self.import_id_column = None
+        self.import_display_columns = []
         has_join_count = "join_count" in df.columns
         has_win_count = "win_count" in df.columns
         for _, row in df.iterrows():
+            raw_values = {col: self._raw_cell_text(row, col) for col in df.columns}
             record = {
                 "display_name": str(row.get("display_name", "") or "").strip(),
+                "base_display_name": str(row.get("display_name", "") or "").strip(),
                 "vrc_id": str(row.get("vrc_id", "") or "").strip(),
                 "vrc_url": str(row.get("vrc_url", "") or "").strip(),
                 "x_id": str(row.get("x_id", "") or "").strip(),
@@ -678,11 +892,14 @@ class VRCRaffleApp(tk.Tk):
                 "join_count": self._safe_int(row.get("join_count", 0)),
                 "win_count": self._safe_int(row.get("win_count", 0)),
                 "current_probability": str(row.get("current_probability", "") or "").strip(),
-                "raw_data": json.dumps({k: str(v) for k, v in row.items()}, ensure_ascii=False),
+                "raw_values": raw_values,
+                "draw_id": "",
+                "display_fields": {},
+                "raw_data": json.dumps(raw_values, ensure_ascii=False),
                 "participant_id": None,
                 "matched": False,
             }
-            if not any(record.get(k) for k in ("display_name", "vrc_id", "vrc_url", "x_id", "x_url")):
+            if not any(raw_values.values()):
                 continue
 
             p, _ = fuzzy_find_participant(
@@ -692,23 +909,28 @@ class VRCRaffleApp(tk.Tk):
                 record["matched"] = True
                 if not record["display_name"]:
                     record["display_name"] = p.get("display_name", "")
+                if not record["base_display_name"]:
+                    record["base_display_name"] = record["display_name"]
                 if not has_join_count:
                     record["join_count"] = p.get("join_count", 0)
                 if not has_win_count:
                     record["win_count"] = p.get("win_count", 0)
 
             record["display_name"] = self._record_display_name(record)
+            if not record["base_display_name"]:
+                record["base_display_name"] = record["display_name"]
             records.append(record)
         conn.close()
 
         self.imported_records = records
         self.last_winner_indices = set()
+        self._apply_import_column_roles()
         self._recalculate_record_probabilities()
         self._refresh_import_tree()
 
         found = [c for c in COLUMN_ALIASES if c in df.columns]
         self.result_status.config(
-            text=f"{len(records)}件の記録を読み込みました。認識済み: {', '.join(found) or 'なし'}")
+            text=f"{len(records)}件を読み込みました。左クリックで抽選ID列を指定、右クリックで取消。")
 
     def _on_raffle_mode_change(self):
         if self.imported_records:
@@ -732,27 +954,36 @@ class VRCRaffleApp(tk.Tk):
         return weights
 
     def _refresh_import_tree(self):
-        self.result_tree.delete(*self.result_tree.get_children())
-        self.result_tree.tag_configure("winner", background="#eff6ff", foreground=self.FG)
+        columns = ["状態"]
+        source_columns = list(self.import_source_columns)
+        columns.extend(source_columns)
+        tail_columns = ["参加回数", "当選回数", "現在確率", "照合"]
+        columns.extend(tail_columns)
+
+        rows = []
         for idx, record in enumerate(self.imported_records):
             is_winner = idx in self.last_winner_indices
-            self.result_tree.insert("", "end", iid=str(idx),
-                                    tags=("winner",) if is_winner else (),
-                                    values=(
-                                        "当選" if is_winner else "待機",
-                                        record.get("display_name", ""),
-                                        record.get("vrc_id", ""),
-                                        record.get("vrc_url", ""),
-                                        record.get("x_id", ""),
-                                        record.get("x_url", ""),
-                                        record.get("join_count", 0),
-                                        record.get("win_count", 0),
-                                        record.get("current_probability", ""),
-                                        "既存" if record.get("matched") else "新規",
-                                    ))
+            raw = record.get("raw_values", {})
+            row = ["当選" if is_winner else "待機"]
+            row.extend(raw.get(col, "") for col in source_columns)
+            row.extend([
+                record.get("join_count", 0),
+                record.get("win_count", 0),
+                record.get("current_probability", ""),
+                "既存" if record.get("matched") else "新規",
+            ])
+            rows.append(row)
+
+        self.result_table.set_data(
+            columns,
+            rows,
+            source_columns=source_columns,
+            id_column=self.import_id_column,
+            display_columns=self.import_display_columns,
+            winner_indices=self.last_winner_indices)
 
     def _get_selected_import_index(self):
-        sel = self.result_tree.selection()
+        sel = self.result_table.selection()
         if not sel:
             messagebox.showinfo("ヒント", "編集する記録を選択してください")
             return None
@@ -802,11 +1033,17 @@ class VRCRaffleApp(tk.Tk):
                 if field in ("join_count", "win_count"):
                     continue
                 record[field] = vars_[field].get().strip()
+            record["base_display_name"] = record.get("display_name", "")
             record["join_count"] = join_count
             record["win_count"] = win_count
-            record["display_name"] = self._record_display_name(record)
+            self._apply_import_column_roles()
             record["raw_data"] = json.dumps(
-                {field: record.get(field, "") for field, _ in fields},
+                {
+                    "raw_values": record.get("raw_values", {}),
+                    "draw_id_column": self.import_id_column,
+                    "display_columns": self.import_display_columns,
+                    "edited_fields": {field: record.get(field, "") for field, _ in fields},
+                },
                 ensure_ascii=False)
 
             self._recalculate_record_probabilities()
@@ -947,11 +1184,12 @@ class VRCRaffleApp(tk.Tk):
             participant_id = participant_ids[wi]
             conn.execute(
                 "INSERT INTO raffle_results "
-                "(session_id,participant_id,display_name,vrc_id,vrc_url,x_id,x_url,is_winner)"
-                " VALUES (?,?,?,?,?,?,?,1)",
+                "(session_id,participant_id,display_name,vrc_id,vrc_url,x_id,x_url,is_winner,extra_display_json)"
+                " VALUES (?,?,?,?,?,?,?,1,?)",
                 (session_id, participant_id, self._record_display_name(record),
                  record.get("vrc_id", ""), record.get("vrc_url", ""),
-                 record.get("x_id", ""), record.get("x_url", "")))
+                 record.get("x_id", ""), record.get("x_url", ""),
+                 json.dumps(record.get("display_fields", {}), ensure_ascii=False)))
             record["win_count"] = record.get("win_count", 0) + 1
             conn.execute(
                 "UPDATE participants SET win_count=win_count+1 WHERE id=?",
@@ -1288,26 +1526,44 @@ class VRCRaffleApp(tk.Tk):
     def _open_results_window(self, sid):
         conn = sqlite3.connect(db_path())
         rows = conn.execute(
-            "SELECT id,display_name,vrc_id,vrc_url,x_id,x_url,is_winner "
+            "SELECT id,display_name,vrc_id,vrc_url,x_id,x_url,is_winner,extra_display_json "
             "FROM raffle_results WHERE session_id=?", (sid,)).fetchall()
         conn.close()
+        extra_keys = []
+        parsed_rows = []
+        for row in rows:
+            extra = {}
+            if len(row) > 7 and row[7]:
+                try:
+                    extra = json.loads(row[7])
+                except (TypeError, json.JSONDecodeError):
+                    extra = {}
+            for key in extra:
+                if key not in extra_keys:
+                    extra_keys.append(key)
+            parsed_rows.append((row[:7], extra))
 
         win = tk.Toplevel(self)
         win.title(f"セッション #{sid} — 抽選結果")
         win.configure(bg=self.BG)
         win.geometry("900x420")
 
-        cols = ("id","display_name","vrc_id","vrc_url","x_id","x_url","is_winner")
+        cols = ("id","display_name","vrc_id","vrc_url","x_id","x_url", *extra_keys, "is_winner")
         tree = ttk.Treeview(win, columns=cols, show="headings")
         heads = {"id":"ID","display_name":"名前","vrc_id":"VRC ID","vrc_url":"VRC URL",
                  "x_id":"X ID","x_url":"X URL","is_winner":"当選"}
-        widths = [45, 130, 130, 150, 110, 150, 50]
-        for c, w in zip(cols, widths):
-            tree.heading(c, text=heads[c])
+        widths = {
+            "id": 45, "display_name": 130, "vrc_id": 130, "vrc_url": 150,
+            "x_id": 110, "x_url": 150, "is_winner": 50
+        }
+        for c in cols:
+            tree.heading(c, text=heads.get(c, c))
+            w = widths.get(c, 140)
             tree.column(c, width=w, anchor="center")
-        for row in rows:
-            tag = "win" if row[-1] == 1 else ""
-            tree.insert("", "end", values=row, tags=(tag,))
+        for base, extra in parsed_rows:
+            values = list(base[:6]) + [extra.get(key, "") for key in extra_keys] + [base[6]]
+            tag = "win" if base[-1] == 1 else ""
+            tree.insert("", "end", values=values, tags=(tag,))
         tree.tag_configure("win",
                            background="#eff6ff",
                            foreground=self.FG)
@@ -1356,11 +1612,12 @@ class VRCRaffleApp(tk.Tk):
                  vars_["vrc_url"].get(), vars_["x_id"].get(),
                  vars_["x_url"].get(), result_id))
             conn.commit(); conn.close()
-            tree.item(sel[0], values=(
-                result_id,
+            updated = list(vals)
+            updated[1:6] = [
                 vars_["display_name"].get(), vars_["vrc_id"].get(),
                 vars_["vrc_url"].get(), vars_["x_id"].get(),
-                vars_["x_url"].get(), vals[6]))
+                vars_["x_url"].get()]
+            tree.item(sel[0], values=updated)
             win.destroy()
             messagebox.showinfo("成功", "結果を更新しました")
 
