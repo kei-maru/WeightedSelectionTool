@@ -108,8 +108,7 @@ const state = {
           <div>1. 抽選に使うID列を左クリックしてください。選択された列は<span class="blueText">青色</span>になります。</div>
           <div>2. 結果に表示したい列を左クリックしてください。表示列は<span class="greenText">緑色</span>になります。</div>
           <div>3. 未選択の列を右クリックすると、<span class="orangeText">特別条件</span>を設定できます。条件に合う応募者の確率が上がります。</div>
-          <div>4. 行をクリックすると、その応募者を抽選から除外できます。除外行は<span class="redText">赤色</span>になります。</div>
-          <div>5. <span class="blueText">青色</span>・<span class="greenText">緑色</span>・<span class="orangeText">オレンジ色</span>の列を右クリックすると指定を解除できます。</div>`;
+          <div>4. 行をクリックすると、その応募者を抽選から除外できます。除外行は<span class="redText">赤色</span>になります。</div>`;
       } else if (activeTab === "events") {
         $("guide").style.display = "";
         $("panelTitle").textContent = "Event編集";

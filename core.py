@@ -45,6 +45,12 @@ def init_db():
     participant_cols = [r[1] for r in c.execute("PRAGMA table_info(participants)").fetchall()]
     if "last_win_join_count" not in participant_cols:
         c.execute("ALTER TABLE participants ADD COLUMN last_win_join_count INTEGER DEFAULT 0")
+    if "streak_count" not in participant_cols:
+        c.execute("ALTER TABLE participants ADD COLUMN streak_count INTEGER DEFAULT 0")
+        c.execute("""
+            UPDATE participants
+            SET streak_count = max(join_count - COALESCE(last_win_join_count, 0), 0)
+        """)
     c.execute("""
         CREATE TABLE IF NOT EXISTS raffle_sessions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,10 +128,13 @@ def calc_weights(participants_info: list, mode: str, total: int) -> list:
     for p in participants_info:
         join_count = p.get("join_count", 0)
         win_count = p.get("win_count", 0)
-        last_win_join_count = p.get("last_win_join_count")
-        if last_win_join_count is None:
-            last_win_join_count = max(join_count - win_count, 0)
-        n = max(join_count - last_win_join_count, 0)
+        streak_count = p.get("streak_count")
+        if streak_count is None:
+            last_win_join_count = p.get("last_win_join_count")
+            if last_win_join_count is None:
+                last_win_join_count = max(join_count - win_count, 0)
+            streak_count = max(join_count - last_win_join_count, 0)
+        n = max(streak_count, 0)
         if mode == "linear":
             weight = float(max(n ** 2, 1))
         else:

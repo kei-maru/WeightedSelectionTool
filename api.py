@@ -74,7 +74,7 @@ def participant_stats_by_name(conn, display_name):
     if not key:
         return None
     rows = conn.execute("""
-        SELECT id, display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count, last_win_join_count
+        SELECT id, display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count, last_win_join_count, streak_count
         FROM participants
         WHERE lower(trim(display_name))=lower(trim(?))
         ORDER BY id
@@ -82,13 +82,14 @@ def participant_stats_by_name(conn, display_name):
     if not rows:
         return None
     col_names = [d[0] for d in conn.execute(
-        "SELECT id, display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count, last_win_join_count FROM participants LIMIT 0"
+        "SELECT id, display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count, last_win_join_count, streak_count FROM participants LIMIT 0"
     ).description]
     dict_rows = [dict(zip(col_names, row)) for row in rows]
     first = dict_rows[0]
     first["join_count"] = sum(safe_int(row.get("join_count", 0)) for row in dict_rows)
     first["win_count"] = sum(safe_int(row.get("win_count", 0)) for row in dict_rows)
     first["last_win_join_count"] = max(safe_int(row.get("last_win_join_count", 0)) for row in dict_rows)
+    first["streak_count"] = max(safe_int(row.get("streak_count", 0)) for row in dict_rows)
     return first
 
 
@@ -108,6 +109,7 @@ def dedupe_user_rows(rows):
             grouped[key]["join_count"] = safe_int(row.get("join_count", 0))
             grouped[key]["win_count"] = safe_int(row.get("win_count", 0))
             grouped[key]["last_win_join_count"] = safe_int(row.get("last_win_join_count", 0))
+            grouped[key]["streak_count"] = safe_int(row.get("streak_count", 0))
             order.append(key)
             continue
         target = grouped[key]
@@ -116,6 +118,9 @@ def dedupe_user_rows(rows):
         target["last_win_join_count"] = max(
             safe_int(target.get("last_win_join_count", 0)),
             safe_int(row.get("last_win_join_count", 0)))
+        target["streak_count"] = max(
+            safe_int(target.get("streak_count", 0)),
+            safe_int(row.get("streak_count", 0)))
         target["winner"] = bool(target.get("winner")) or bool(row.get("winner"))
         for field, value in row.get("displayFields", {}).items():
             if value and not target.get("displayFields", {}).get(field):
@@ -143,6 +148,8 @@ def apply_column_roles():
                 record["win_count"] = participant.get("win_count", record.get("win_count", 0))
                 record["last_win_join_count"] = participant.get(
                     "last_win_join_count", record.get("last_win_join_count", 0))
+                record["streak_count"] = participant.get(
+                    "streak_count", record.get("streak_count", 0))
         else:
             record["display_name"] = (
                 record.get("base_display_name")
@@ -251,6 +258,7 @@ def build_records(df):
             "join_count": safe_int(row.get("join_count", 0)),
             "win_count": safe_int(row.get("win_count", 0)),
             "last_win_join_count": safe_int(row.get("last_win_join_count", 0)),
+            "streak_count": safe_int(row.get("streak_count", 0)),
             "current_probability": str(row.get("current_probability", "") or "").strip(),
             "raw_values": raw_values,
             "draw_id": "",
@@ -276,6 +284,7 @@ def build_records(df):
             if not has_win_count:
                 record["win_count"] = participant.get("win_count", 0)
             record["last_win_join_count"] = participant.get("last_win_join_count", 0)
+            record["streak_count"] = participant.get("streak_count", 0)
 
         record["display_name"] = record_display_name(record)
         if not record["base_display_name"]:
@@ -297,11 +306,12 @@ def save_participant_from_record(conn, record):
         record.get("join_count", 0),
         record.get("win_count", 0),
         record.get("last_win_join_count", 0),
+        record.get("streak_count", 0),
     )
     if participant_id:
         conn.execute(
             "UPDATE participants SET vrc_id=?,vrc_url=?,x_id=?,x_url=?,"
-            "display_name=?,join_count=?,win_count=?,last_win_join_count=? WHERE id=?",
+            "display_name=?,join_count=?,win_count=?,last_win_join_count=?,streak_count=? WHERE id=?",
             (*values, participant_id))
         return participant_id
 
@@ -310,7 +320,7 @@ def save_participant_from_record(conn, record):
         participant_id = existing["id"]
         conn.execute(
             "UPDATE participants SET vrc_id=?,vrc_url=?,x_id=?,x_url=?,"
-            "display_name=?,join_count=?,win_count=?,last_win_join_count=? WHERE id=?",
+            "display_name=?,join_count=?,win_count=?,last_win_join_count=?,streak_count=? WHERE id=?",
             (*values, participant_id))
         record["participant_id"] = participant_id
         record["matched"] = True
@@ -318,8 +328,8 @@ def save_participant_from_record(conn, record):
 
     cur = conn.execute(
         "INSERT INTO participants "
-        "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,last_win_join_count,created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
+        "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,last_win_join_count,streak_count,created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
         (*values, now))
     record["participant_id"] = cur.lastrowid
     record["matched"] = False
@@ -365,7 +375,8 @@ def db_snapshot():
         SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
                COUNT(sr.id) AS join_count,
                COALESCE(w.win_count, 0) AS win_count,
-               COALESCE(p.last_win_join_count, 0) AS last_win_join_count
+               COALESCE(p.last_win_join_count, 0) AS last_win_join_count,
+               COALESCE(p.streak_count, 0) AS streak_count
         FROM submission_records sr
         JOIN raffle_sessions s ON s.id = sr.session_id
         JOIN participants p ON p.id = sr.matched_participant_id
@@ -377,7 +388,7 @@ def db_snapshot():
             GROUP BY rr.participant_id
         ) w ON w.participant_id = p.id
         {where}
-        GROUP BY p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url, p.last_win_join_count
+        GROUP BY p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url, p.last_win_join_count, p.streak_count
         ORDER BY join_count DESC, p.id DESC
     """, [*params, *params]).fetchall()]
     conn.close()
@@ -390,6 +401,7 @@ def db_snapshot():
             "join_count": row.get("join_count", 0),
             "win_count": row.get("win_count", 0),
             "last_win_join_count": row.get("last_win_join_count", 0),
+            "streak_count": row.get("streak_count", 0),
             "current_probability": "",
             "matched": "保存済み",
             "status": "記録",
@@ -470,6 +482,7 @@ def public_state(message=""):
             "join_count": record.get("join_count", 0),
             "win_count": record.get("win_count", 0),
             "last_win_join_count": record.get("last_win_join_count", 0),
+            "streak_count": record.get("streak_count", 0),
             "weight": f"{record.get('weight', 1.0):.4g}" if isinstance(record.get("weight", 1.0), (int, float)) else record.get("weight", ""),
             "special_multiplier": record.get("special_multiplier", 1.0),
             "current_probability": record.get("current_probability", ""),
@@ -604,7 +617,10 @@ def run_raffle(payload):
         participant_id = save_participant_from_record(conn, record)
         participant_ids[record_idx] = participant_id
         record["join_count"] = record.get("join_count", 0) + 1
-        conn.execute("UPDATE participants SET join_count=join_count+1 WHERE id=?", (participant_id,))
+        record["streak_count"] = record.get("streak_count", 0) + 1
+        conn.execute(
+            "UPDATE participants SET join_count=join_count+1,streak_count=streak_count+1 WHERE id=?",
+            (participant_id,))
         conn.execute(
             "INSERT INTO submission_records "
             "(session_id,raw_data,matched_participant_id,created_at)"
@@ -626,8 +642,9 @@ def run_raffle(payload):
              json.dumps(record.get("display_fields", {}), ensure_ascii=False)))
         record["win_count"] = record.get("win_count", 0) + 1
         record["last_win_join_count"] = reset_join_count
+        record["streak_count"] = 0
         conn.execute(
-            "UPDATE participants SET win_count=win_count+1,last_win_join_count=? WHERE id=?",
+            "UPDATE participants SET win_count=win_count+1,last_win_join_count=?,streak_count=0 WHERE id=?",
             (reset_join_count, participant_id))
 
     conn.commit()
