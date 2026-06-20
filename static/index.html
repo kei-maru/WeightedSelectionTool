@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Google form抽選ツール Local Web</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Google form抽選ツール <span class="hint">Local Web</span></h1>
+    <button class="danger exitAction" type="button">終了</button>
+  </header>
+  <main class="shell">
+    <aside class="card">
+      <form id="uploadForm">
+        <label>CSV / Excel ファイル</label>
+        <input id="csvFile" name="file" type="file" accept=".csv,.xls,.xlsx" hidden>
+        <button id="uploadButton" class="primary" type="button" style="width:100%; margin-top:10px;">CSV / Excel を選択して読み込み</button>
+      </form>
+
+      <label>Event</label>
+      <select id="eventSelect">
+        <option value="">default</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label>抽選人数</label>
+          <input id="drawCount" type="number" min="1" value="1">
+        </div>
+        <div>
+          <label>確率モード</label>
+          <select id="mode">
+            <option value="linear">線形加重 - n^2</option>
+            <option value="double">指数加重 - 2^n</option>
+            <option value="equal">均等抽選 - 履歴を見ず全員同じ</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="check">
+        <input id="allowRepeat" type="checkbox">
+        <span>重複当選を許可</span>
+      </label>
+
+      <label>備考</label>
+      <textarea id="notes"></textarea>
+
+      <button id="raffleBtn" class="primary" style="width:100%; margin-top:14px;" disabled>抽選開始</button>
+      <button class="danger exitAction" type="button" style="width:100%; margin-top:10px;">アプリを終了</button>
+
+      <div class="miniStats">
+        <div class="mini"><span>応募者</span><strong id="statTotal">0</strong></div>
+        <div class="mini"><span>ID列</span><strong id="statId">未</strong></div>
+        <div class="mini"><span>表示列</span><strong id="statDisplay">0</strong></div>
+      </div>
+    </aside>
+
+    <section class="card content">
+      <div class="topline">
+        <div>
+          <strong id="panelTitle">列設定</strong>
+          <div class="hint" id="fileName">CSV / Excel を読み込んでください。</div>
+        </div>
+      </div>
+      <nav class="tabs">
+        <button class="tab active" type="button" data-tab="select">列設定</button>
+        <button class="tab" type="button" data-tab="events">Event編集</button>
+        <button class="tab" type="button" data-tab="results">抽選結果</button>
+        <button class="tab" type="button" data-tab="users">ユーザー一覧</button>
+      </nav>
+      <div class="guide" id="guide"></div>
+      <div class="tableWrap" id="tableWrap">
+        <div class="empty">CSV / Excel を読み込んでください。</div>
+      </div>
+      <div class="status" id="status">待機中</div>
+    </section>
+  </main>
+  <div class="modalOverlay" id="specialModal">
+    <div class="modal">
+      <h2>特別条件を設定</h2>
+      <div class="hint" id="specialColumnText"></div>
+      <label>この値の応募者を優先します</label>
+      <select id="specialValue"></select>
+      <label>倍率</label>
+      <input id="specialMultiplier" type="number" min="1" step="0.1" value="2">
+      <div class="hint" style="margin-top:8px;">選んだ値に一致する応募者の重みに、この倍率を掛けます。</div>
+      <div class="modalActions">
+        <button class="primary" type="button" id="specialSave">設定</button>
+        <button class="soft" type="button" id="specialClear">解除</button>
+        <button class="danger" type="button" id="specialCancel">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
