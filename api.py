@@ -215,7 +215,7 @@ def calculation_summary(mode=None, special_rules=None):
     if mode == "equal":
         parts = ["基本重み: 全員 1"]
     elif mode == "linear":
-        parts = ["基本重み: n^2"]
+        parts = ["基本重み: (n + 1)^2"]
     else:
         parts = ["基本重み: 2^n"]
     if special_rules:
@@ -371,42 +371,49 @@ def db_snapshot():
     }
 
     where, params = event_where_clause("s.event_id", user_event_id)
-    participant_rows = [dict(row) for row in conn.execute(f"""
+    history_rows = [dict(row) for row in conn.execute(f"""
         SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
-               COUNT(sr.id) AS join_count,
-               COALESCE(w.win_count, 0) AS win_count,
-               COALESCE(p.last_win_join_count, 0) AS last_win_join_count,
-               COALESCE(p.streak_count, 0) AS streak_count
+               s.id AS session_id,
+               COALESCE(w.win_count, 0) AS session_win_count
         FROM submission_records sr
         JOIN raffle_sessions s ON s.id = sr.session_id
         JOIN participants p ON p.id = sr.matched_participant_id
         LEFT JOIN (
-            SELECT rr.participant_id, COUNT(rr.id) AS win_count
-            FROM raffle_results rr
-            JOIN raffle_sessions ws ON ws.id = rr.session_id
-            {where.replace("s.event_id", "ws.event_id")}
-            GROUP BY rr.participant_id
-        ) w ON w.participant_id = p.id
+            SELECT session_id, participant_id, COUNT(id) AS win_count
+            FROM raffle_results
+            GROUP BY session_id, participant_id
+        ) w ON w.session_id = s.id AND w.participant_id = p.id
         {where}
-        GROUP BY p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url, p.last_win_join_count, p.streak_count
-        ORDER BY join_count DESC, p.id DESC
-    """, [*params, *params]).fetchall()]
+        ORDER BY s.id, sr.id
+    """, params).fetchall()]
     conn.close()
 
-    users = []
-    for row in participant_rows:
-        users.append({
-            "drawId": row.get("display_name") or row.get("vrc_id") or row.get("x_id") or f"User #{row.get('id')}",
-            "displayFields": {},
-            "join_count": row.get("join_count", 0),
-            "win_count": row.get("win_count", 0),
-            "last_win_join_count": row.get("last_win_join_count", 0),
-            "streak_count": row.get("streak_count", 0),
-            "current_probability": "",
-            "matched": "保存済み",
-            "status": "記録",
-            "winner": False,
-        })
+    users_by_id = {}
+    for row in history_rows:
+        participant_id = row.get("id")
+        if participant_id not in users_by_id:
+            users_by_id[participant_id] = {
+                "drawId": row.get("display_name") or row.get("vrc_id") or row.get("x_id") or f"User #{row.get('id')}",
+                "displayFields": {},
+                "join_count": 0,
+                "win_count": 0,
+                "last_win_join_count": 0,
+                "streak_count": 0,
+                "current_probability": "",
+                "matched": "保存済み",
+                "status": "記録",
+                "winner": False,
+            }
+        user = users_by_id[participant_id]
+        user["join_count"] += 1
+        user["streak_count"] += 1
+        session_win_count = safe_int(row.get("session_win_count", 0))
+        if session_win_count:
+            user["win_count"] += session_win_count
+            user["last_win_join_count"] = user["join_count"]
+            user["streak_count"] = 0
+            user["winner"] = True
+    users = list(users_by_id.values())
     users = dedupe_user_rows(users)
     total = len(users)
     mode = "equal" if FREE_BUILD else STATE.get("mode", "linear")

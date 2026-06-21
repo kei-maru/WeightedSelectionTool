@@ -1,0 +1,16 @@
+名前,vrchat_id,vrchat url,twitter id,twitter url,会員ランク,タスク完了,希望賞品,メモ
+Mika_青,mika_blue,https://vrchat.com/home/user/usr_mika,@mika_blue,https://x.com/mika_blue,VIP,完了,賞品A,特別条件テスト用
+Nora_白,nora_white,https://vrchat.com/home/user/usr_nora,@nora_white,https://x.com/nora_white,通常,未完了,賞品B,
+Owen_緑,owen_green,https://vrchat.com/home/user/usr_owen,@owen_green,https://x.com/owen_green,VIP,完了,賞品C,VIP または 完了で特別条件を確認
+Pico_紫,pico_purple,https://vrchat.com/home/user/usr_pico,@pico_purple,https://x.com/pico_purple,通常,完了,賞品A,
+Quinn_橙,quinn_orange,https://vrchat.com/home/user/usr_quinn,@quinn_orange,https://x.com/quinn_orange,新人,未完了,賞品B,
+Rin_銀,rin_silver,https://vrchat.com/home/user/usr_rin,@rin_silver,https://x.com/rin_silver,通常,完了,賞品C,
+Sora_金,sora_gold,https://vrchat.com/home/user/usr_sora,@sora_gold,https://x.com/sora_gold,VIP,完了,賞品A,
+Tao_藍,tau_blue,https://vrchat.com/home/user/usr_tao,@tao_blue,https://x.com/tau_blue,通常,未完了,賞品B,
+Uma_紅,uma_red,https://vrchat.com/home/user/usr_uma,@uma_red,https://x.com/uma_red,VIP,未完了,賞品C,
+Vivi_桃,vivi_peach,https://vrchat.com/home/user/usr_vivi,@vivi_peach,https://x.com/vivi_peach,新人,完了,賞品A,
+Wen_墨,wen_ink,https://vrchat.com/home/user/usr_wen,@wen_ink,https://x.com/wen_ink,通常,完了,賞品B,
+Xia_雲,xia_cloud,https://vrchat.com/home/user/usr_xia,@xia_cloud,https://x.com/xia_cloud,VIP,完了,賞品C,
+Yuki_霜,yuki_frost,https://vrchat.com/home/user/usr_yuki,,https://x.com/yuki_frost,通常,未完了,賞品A,X ID が空
+Zed_黒,,https://vrchat.com/home/user/usr_zed,@zed_black,https://x.com/zed_black,新人,完了,賞品B,VRC ID が空
+,anon_guest,https://vrchat.com/home/user/usr_anon,@anon_guest,https://x.com/anon_guest,通常,完了,賞品C,名前が空の場合は VRC ID を抽選IDにできる

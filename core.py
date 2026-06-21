@@ -3,13 +3,9 @@ import sqlite3
 import sys
 
 import pandas as pd
-from thefuzz import fuzz
 
 
 FREE_BUILD = False
-FUZZY_THRESHOLD = 80
-
-
 def db_path() -> str:
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
@@ -99,12 +95,9 @@ def fuzzy_find_participant(conn, vrc_id="", vrc_url="", x_id="", x_url=""):
     c = conn.cursor()
     rows = c.execute("SELECT * FROM participants").fetchall()
     col_names = [d[0] for d in c.description]
-    best_score, best_row = 0, None
 
-    def score(a, b):
-        if not a or not b:
-            return 0
-        return fuzz.token_sort_ratio(a.strip().lower(), b.strip().lower())
+    def normalize(value):
+        return str(value or "").strip().rstrip("/").lower()
 
     for row in rows:
         r = dict(zip(col_names, row))
@@ -114,13 +107,9 @@ def fuzzy_find_participant(conn, vrc_id="", vrc_url="", x_id="", x_url=""):
             (x_id, r.get("x_id", "") or ""),
             (x_url, r.get("x_url", "") or ""),
         ]
-        scores = [score(a, b) for a, b in values if a]
-        if not scores:
-            continue
-        current = max(scores)
-        if current > best_score:
-            best_score, best_row = current, r
-    return (best_row, best_score) if best_score >= FUZZY_THRESHOLD else (None, best_score)
+        if any(normalize(a) and normalize(a) == normalize(b) for a, b in values):
+            return r, 100
+    return None, 0
 
 
 def calc_weights(participants_info: list, mode: str, total: int) -> list:
@@ -136,7 +125,7 @@ def calc_weights(participants_info: list, mode: str, total: int) -> list:
             streak_count = max(join_count - last_win_join_count, 0)
         n = max(streak_count, 0)
         if mode == "linear":
-            weight = float(max(n ** 2, 1))
+            weight = float((n + 1) ** 2)
         else:
             weight = 2.0 ** n
         weights.append(weight)
