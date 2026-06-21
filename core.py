@@ -125,9 +125,9 @@ def calc_weights(participants_info: list, mode: str, total: int) -> list:
             streak_count = max(join_count - last_win_join_count, 0)
         n = max(streak_count, 0)
         if mode == "linear":
-            weight = float((n + 1) ** 2)
+            weight = float(n + 1)
         else:
-            weight = 2.0 ** n
+            weight = float((n + 1) ** 2)
         weights.append(weight)
     return weights
 

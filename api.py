@@ -204,8 +204,8 @@ def recalculate_probabilities():
 def mode_label(mode):
     return {
         "equal": "均等抽選",
-        "linear": "線形加重",
-        "double": "指数加重",
+        "linear": "ゆるやか加重",
+        "double": "二乗加重",
     }.get(mode, mode)
 
 
@@ -215,9 +215,9 @@ def calculation_summary(mode=None, special_rules=None):
     if mode == "equal":
         parts = ["基本重み: 全員 1"]
     elif mode == "linear":
-        parts = ["基本重み: (n + 1)^2"]
+        parts = ["基本重み: n + 1"]
     else:
-        parts = ["基本重み: 2^n"]
+        parts = ["基本重み: (n + 1)^2"]
     if special_rules:
         rule_text = " / ".join(
             f"【{r.get('value')}】 倍率 ×{float(r.get('multiplier', 2.0)):g}"
