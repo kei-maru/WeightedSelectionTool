@@ -1,14 +1,17 @@
-import json
 import os
+import socket
 import threading
 import time
-import traceback
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from contextlib import asynccontextmanager
 
-from api import build_event_export, handle_api
+import uvicorn
+from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
 from core import init_db
+from fastapi_routes import router
 
 
 HOST = os.environ.get("APP_HOST", "127.0.0.1")
@@ -17,115 +20,90 @@ OPEN_BROWSER = os.environ.get("OPEN_BROWSER", "1") == "1"
 ALLOW_SHUTDOWN = os.environ.get("ALLOW_SHUTDOWN", "1") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-STATIC_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-}
 
 
-class LocalWebHandler(BaseHTTPRequestHandler):
-    server_version = "WeightedSelectionLocal/1.0"
-
-    def log_message(self, fmt, *args):
-        return
-
-    def send_json(self, data, status=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/api/export":
-            try:
-                event_id = parse_qs(parsed.query).get("eventId", ["__all__"])[0]
-                body, filename = build_event_export(event_id)
-                self.send_response(200)
-                self.send_header(
-                    "Content-Type",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                self.send_header(
-                    "Content-Disposition",
-                    f"attachment; filename*=UTF-8''{quote(filename)}")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            except Exception as exc:
-                traceback.print_exc()
-                self.send_json({"ok": False, "error": str(exc)}, status=400)
-            return
-        if parsed.path in ("/", "/index.html"):
-            path = os.path.join(STATIC_DIR, "index.html")
-        elif parsed.path.startswith("/static/"):
-            name = parsed.path.removeprefix("/static/")
-            if "/" in name or "\\" in name or not name:
-                self.send_error(404)
-                return
-            path = os.path.join(STATIC_DIR, name)
-        else:
-            self.send_error(404)
-            return
-
-        if not os.path.isfile(path):
-            self.send_error(404)
-            return
-
-        with open(path, "rb") as f:
-            body = f.read()
-        content_type = STATIC_TYPES.get(os.path.splitext(path)[1], "application/octet-stream")
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/api/shutdown":
-            if not ALLOW_SHUTDOWN:
-                self.send_json({"ok": False, "error": "サーバー上では終了操作を利用できません。"}, status=403)
-                return
-            self.send_json({"ok": True})
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-            return
-
-        try:
-            result = handle_api(parsed.path, self.headers, self.rfile)
-            self.send_json(result)
-        except KeyError:
-            self.send_error(404)
-        except Exception as exc:
-            traceback.print_exc()
-            self.send_json({"ok": False, "error": str(exc)}, status=400)
+@asynccontextmanager
+async def lifespan(_app):
+    init_db()
+    yield
 
 
-def make_server():
+app = FastAPI(
+    title="Google form抽選ツール",
+    version="2.0.0",
+    lifespan=lifespan,
+)
+app.include_router(router)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def disable_browser_cache(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(_request: Request, exc: ValueError):
+    return JSONResponse(
+        status_code=400,
+        content={"ok": False, "error": str(exc)},
+    )
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/index.html", include_in_schema=False)
+async def index_html():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+def request_server_stop():
+    server = getattr(app.state, "server", None)
+    if server is not None:
+        server.should_exit = True
+
+
+@app.post("/api/shutdown", include_in_schema=False)
+async def shutdown(background_tasks: BackgroundTasks):
+    if not ALLOW_SHUTDOWN:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": "サーバー上では終了操作を利用できません。"},
+        )
+    background_tasks.add_task(request_server_stop)
+    return {"ok": True}
+
+
+def find_available_port():
     for port in range(START_PORT, START_PORT + 20):
-        try:
-            return ThreadingHTTPServer((HOST, port), LocalWebHandler)
-        except OSError:
-            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind((HOST, port))
+            except OSError:
+                continue
+            return port
     raise RuntimeError("利用可能なローカルポートが見つかりません。")
 
 
 def main():
-    init_db()
-    server = make_server()
-    url = f"http://{HOST}:{server.server_port}/"
-    print(f"Local web app: {url}", flush=True)
+    port = find_available_port()
+    url_host = "127.0.0.1" if HOST == "0.0.0.0" else HOST
+    url = f"http://{url_host}:{port}/"
+    config = uvicorn.Config(app, host=HOST, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    app.state.server = server
+    print(f"FastAPI app: {url}", flush=True)
     if OPEN_BROWSER:
-        threading.Thread(target=lambda: (time.sleep(0.4), webbrowser.open(url)), daemon=True).start()
-    try:
-        server.serve_forever()
-    finally:
-        server.server_close()
-        print("Local web app stopped.", flush=True)
+        threading.Thread(
+            target=lambda: (time.sleep(0.5), webbrowser.open(url)),
+            daemon=True,
+        ).start()
+    server.run()
 
 
 if __name__ == "__main__":

@@ -2,3 +2,6 @@ pandas
 openpyxl
 thefuzz
 python-Levenshtein
+fastapi
+uvicorn
+python-multipart

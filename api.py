@@ -6,8 +6,6 @@ import random
 import re
 import sqlite3
 import tempfile
-from email.parser import BytesParser
-from email.policy import default
 
 import pandas as pd
 
@@ -342,14 +340,6 @@ def save_participant_from_record(conn, record):
     record["participant_id"] = cur.lastrowid
     record["matched"] = False
     return cur.lastrowid
-
-
-def event_where_clause(column="s.event_id", event_id=None):
-    if event_id in ("", None, "__all__"):
-        return "", []
-    if event_id == "__default__":
-        return f" WHERE {column} IS NULL", []
-    return f" WHERE {column}=?", [safe_int(event_id, None)]
 
 
 def event_db_id(event_id):
@@ -848,29 +838,13 @@ def run_raffle(payload):
     return public_state(f"抽選完了: Session #{session_id} | {total}人中 {len(winners_idx)}名当選")
 
 
-def read_json(headers, rfile):
-    length = int(headers.get("Content-Length", "0"))
-    raw = rfile.read(length)
-    return json.loads(raw.decode("utf-8") or "{}")
-
-
-def read_uploaded_dataframe(headers, rfile):
-    content_type = headers.get("Content-Type", "")
-    length = int(headers.get("Content-Length", "0"))
-    body = rfile.read(length)
-    message = BytesParser(policy=default).parsebytes(
-        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body)
-    item = next(
-        (part for part in message.iter_parts()
-         if part.get_param("name", header="content-disposition") == "file"),
-        None)
-    filename = item.get_filename() if item is not None else ""
-    if not filename:
+def read_uploaded_dataframe(filename, content):
+    filename = os.path.basename(str(filename or ""))
+    if not filename or not content:
         raise ValueError("ファイルを選択してください。")
-
     suffix = os.path.splitext(filename)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(item.get_payload(decode=True) or b"")
+        tmp.write(content)
         tmp_path = tmp.name
     try:
         df = load_csv_or_excel(tmp_path)
@@ -879,8 +853,8 @@ def read_uploaded_dataframe(headers, rfile):
     return os.path.basename(filename), df
 
 
-def handle_upload(headers, rfile):
-    filename, df = read_uploaded_dataframe(headers, rfile)
+def handle_upload(filename, content):
+    filename, df = read_uploaded_dataframe(filename, content)
 
     STATE["records"] = build_records(df)
     STATE["source_columns"] = list(df.columns)
@@ -898,8 +872,8 @@ def handle_upload(headers, rfile):
         f"{len(STATE['records'])}件を読み込みました。左クリックで抽選ID列を指定し、その後に表示列を指定してください。")
 
 
-def handle_history_upload(headers, rfile):
-    filename, df = read_uploaded_dataframe(headers, rfile)
+def handle_history_upload(filename, content):
+    filename, df = read_uploaded_dataframe(filename, content)
     rows = []
     for _, row in df.iterrows():
         values = {
@@ -1424,13 +1398,8 @@ def handle_exclude(payload):
     return public_state(msg)
 
 
-def handle_api(path, headers, rfile):
-    if path == "/api/upload":
-        return handle_upload(headers, rfile)
-    if path == "/api/history/upload":
-        return handle_history_upload(headers, rfile)
-
-    payload = read_json(headers, rfile)
+def handle_action(path, payload=None):
+    payload = payload or {}
     routes = {
         "/api/roles": lambda: handle_roles(payload),
         "/api/raffle": lambda: run_raffle(payload),
