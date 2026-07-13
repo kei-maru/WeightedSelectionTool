@@ -1,4 +1,5 @@
 from . import application as domain
+from .request_context import is_guest_mode
 
 
 class StateService:
@@ -75,6 +76,12 @@ class ApiService:
 
     def dispatch(self, path, payload=None):
         payload = payload or {}
+        guest_routes = {
+            "/api/state", "/api/roles", "/api/raffle", "/api/mode",
+            "/api/special", "/api/exclude",
+        }
+        if is_guest_mode() and path not in guest_routes:
+            raise PermissionError("ゲストモードでは保存機能を利用できません。")
         routes = {
             "/api/state": self.state.get,
             "/api/roles": lambda: self.raffle.set_roles(payload),

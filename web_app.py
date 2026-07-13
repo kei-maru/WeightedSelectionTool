@@ -66,9 +66,16 @@ async def value_error_handler(_request: Request, exc: ValueError):
     )
 
 
+@app.exception_handler(PermissionError)
+async def permission_error_handler(_request: Request, exc: PermissionError):
+    return JSONResponse(status_code=403, content={"ok": False, "error": str(exc)})
+
+
 @app.get("/", include_in_schema=False)
 async def index(request: Request):
-    if auth_settings.required and not request.session.get("auth_user"):
+    if auth_settings.required and not (
+        request.session.get("auth_user") or request.session.get("guest_id")
+    ):
         return RedirectResponse("/login")
     return FileResponse(os.path.join(TEMPLATE_DIR, "index.html"))
 
@@ -82,7 +89,7 @@ async def index_html(request: Request):
 async def login_page(request: Request):
     if not auth_settings.required:
         return RedirectResponse("/")
-    if request.session.get("auth_user"):
+    if request.session.get("auth_user") or request.session.get("guest_id"):
         return RedirectResponse("/")
     return FileResponse(os.path.join(TEMPLATE_DIR, "login.html"))
 

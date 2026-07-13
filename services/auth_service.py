@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from core import db_path
+from .request_context import set_request_identity
 
 
 AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
@@ -87,9 +88,22 @@ class XAuthService:
         digest = hashlib.sha256(verifier.encode("ascii")).digest()
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
-    def require_user(self, request: Request):
-        if self.settings.required and not request.session.get("auth_user"):
+    async def require_user(self, request: Request):
+        user = request.session.get("auth_user")
+        guest_id = request.session.get("guest_id")
+        if self.settings.required and not user and not guest_id:
             raise HTTPException(status_code=401, detail="Xでログインしてください。")
+        if user:
+            set_request_identity(f"x:{user['id']}", guest=False)
+        elif guest_id:
+            set_request_identity(f"guest:{guest_id}", guest=True)
+        else:
+            set_request_identity("local", guest=False)
+
+    async def require_saved_account(self, request: Request):
+        await self.require_user(request)
+        if request.session.get("guest_id"):
+            raise HTTPException(status_code=403, detail="ゲストモードでは保存機能を利用できません。")
 
     def login(self, request: Request):
         if not self.settings.required:
@@ -203,12 +217,19 @@ class XAuthService:
         request.session.clear()
         return RedirectResponse("/login" if self.settings.required else "/", status_code=303)
 
+    def start_guest(self, request: Request):
+        request.session.clear()
+        request.session["guest_id"] = secrets.token_urlsafe(18)
+        return RedirectResponse("/", status_code=303)
+
     def me(self, request: Request):
         user = request.session.get("auth_user")
+        guest = bool(request.session.get("guest_id"))
         return {
             "ok": True,
             "required": self.settings.required,
             "authenticated": bool(user),
+            "guest": guest,
             "user": user,
         }
 
@@ -231,6 +252,11 @@ async def callback(request: Request, code: str = None, state: str = None, error:
 @auth_router.get("/auth/logout", include_in_schema=False)
 async def logout(request: Request):
     return auth_service.logout(request)
+
+
+@auth_router.get("/auth/guest", include_in_schema=False)
+async def guest(request: Request):
+    return auth_service.start_guest(request)
 
 
 @auth_router.get("/api/auth/me", include_in_schema=False)

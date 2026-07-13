@@ -9,7 +9,7 @@ const state = {
       mode: "linear", modeLabel: "ゆるやか加重",
       specialRules: [], columnValues: {},
       excludedIndices: [],
-      historyImport: null, historySyncBatches: [], allowShutdown: true,
+      historyImport: null, historySyncBatches: [], allowShutdown: true, guestMode: false,
       calculationSummary: "", selectedCalculationSummary: "",
       summary: { total: 0, winners: 0, idReady: false, displayReady: false }
     };
@@ -27,6 +27,12 @@ const state = {
       try {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
         const data = await response.json();
+        if (data.guest) {
+          $("authUser").textContent = "ゲスト抽選";
+          $("authUser").hidden = false;
+          $("logoutLink").hidden = false;
+          return;
+        }
         if (!data.authenticated || !data.user) return;
         const label = data.user.name || `@${data.user.username}`;
         $("authUser").textContent = `${label} (@${data.user.username})`;
@@ -77,6 +83,12 @@ const state = {
       $("raffleBtn").disabled = !state.rows.length || !state.idColumn;
       $("fileName").textContent = state.csvFile || "CSV / Excel を読み込んでください。";
       $("mode").value = state.mode || $("mode").value;
+      $("mode").disabled = state.guestMode;
+      if (state.guestMode) $("mode").value = "equal";
+      if ($("eventField")) $("eventField").hidden = state.guestMode;
+      document.querySelectorAll('.tab[data-tab="events"], .tab[data-tab="users"]').forEach(tab => {
+        tab.hidden = state.guestMode;
+      });
       if ($("eventSelect")) {
         $("eventSelect").innerHTML = (state.defaultEventEnabled
           ? `<option value="">${escapeHtml(state.defaultEventName)}</option>` : "") + state.events.map(event =>
@@ -118,6 +130,7 @@ const state = {
         historyImport: data.historyImport || null,
         historySyncBatches: data.historySyncBatches || [],
         allowShutdown: data.allowShutdown !== false,
+        guestMode: data.guestMode === true,
         columnValues: data.columnValues || {},
         calculationSummary: data.calculationSummary || state.calculationSummary || "",
         selectedCalculationSummary: "",

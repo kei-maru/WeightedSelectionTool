@@ -50,4 +50,15 @@ h1 { margin: 0; font-size: 28px; }
   text-decoration: none;
 }
 .xLogin:hover { background: #27282c; }
+.guestLogin {
+  display: block;
+  margin-top: 10px;
+  padding: 12px 16px;
+  color: var(--blue);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-decoration: none;
+}
+.guestLogin:hover { background: #f4f7ff; }
+.guestNote { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .privacy { margin: 16px 0 0; color: var(--muted); font-size: 12px; }

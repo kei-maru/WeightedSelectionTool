@@ -6,6 +6,7 @@ import random
 import re
 import sqlite3
 import tempfile
+from collections.abc import MutableMapping
 
 import pandas as pd
 
@@ -16,9 +17,10 @@ from core import (
     fuzzy_find_participant,
     load_csv_or_excel,
 )
+from .request_context import current_account_id, is_guest_mode
 
 
-STATE = {
+DEFAULT_STATE = {
     "records": [],
     "source_columns": [],
     "id_column": None,
@@ -32,6 +34,46 @@ STATE = {
     "user_event_id": "__default__",
     "history_import": None,
 }
+
+
+class AccountState(MutableMapping):
+    """Expose the current request's in-memory import state as a mapping."""
+
+    def __init__(self, defaults):
+        self.defaults = defaults
+        self.states = {}
+
+    def _state(self):
+        account_id = current_account_id()
+        if account_id not in self.states:
+            self.states[account_id] = {
+                key: set(value) if isinstance(value, set)
+                else list(value) if isinstance(value, list)
+                else dict(value) if isinstance(value, dict)
+                else value
+                for key, value in self.defaults.items()
+            }
+            if is_guest_mode():
+                self.states[account_id]["mode"] = "equal"
+        return self.states[account_id]
+
+    def __getitem__(self, key):
+        return self._state()[key]
+
+    def __setitem__(self, key, value):
+        self._state()[key] = value
+
+    def __delitem__(self, key):
+        del self._state()[key]
+
+    def __iter__(self):
+        return iter(self._state())
+
+    def __len__(self):
+        return len(self._state())
+
+
+STATE = AccountState(DEFAULT_STATE)
 
 
 def safe_int(value, default=0):
@@ -78,9 +120,9 @@ def participant_stats_by_name(conn, display_name):
     rows = conn.execute("""
         SELECT id, display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count, last_win_join_count, streak_count
         FROM participants
-        WHERE lower(trim(display_name))=lower(trim(?))
+        WHERE owner_id=? AND lower(trim(display_name))=lower(trim(?))
         ORDER BY id
-    """, (key,)).fetchall()
+    """, (current_account_id(), key)).fetchall()
     if not rows:
         return None
     col_names = [d[0] for d in conn.execute(
@@ -277,7 +319,8 @@ def build_records(df):
             continue
 
         participant, _ = fuzzy_find_participant(
-            conn, record["vrc_id"], record["vrc_url"], record["x_id"], record["x_url"])
+            conn, record["vrc_id"], record["vrc_url"], record["x_id"], record["x_url"],
+            owner_id=current_account_id())
         if participant:
             record["participant_id"] = participant["id"]
             record["matched"] = True
@@ -334,9 +377,9 @@ def save_participant_from_record(conn, record):
 
     cur = conn.execute(
         "INSERT INTO participants "
-        "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,last_win_join_count,streak_count,created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (*values, now))
+        "(vrc_id,vrc_url,x_id,x_url,display_name,join_count,win_count,last_win_join_count,streak_count,created_at,owner_id)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (*values, now, current_account_id()))
     record["participant_id"] = cur.lastrowid
     record["matched"] = False
     return cur.lastrowid
@@ -347,6 +390,7 @@ def event_db_id(event_id):
 
 
 def get_setting(conn, key, fallback=""):
+    key = f"{current_account_id()}:{key}" if current_account_id() != "local" else key
     row = conn.execute(
         "SELECT value FROM app_settings WHERE key=?", (key,)
     ).fetchone()
@@ -354,6 +398,7 @@ def get_setting(conn, key, fallback=""):
 
 
 def set_setting(conn, key, value):
+    key = f"{current_account_id()}:{key}" if current_account_id() != "local" else key
     conn.execute("""
         INSERT INTO app_settings (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value=excluded.value
@@ -380,16 +425,26 @@ def participant_event_totals(conn, participant_ids, event_id):
 
 
 def db_snapshot():
+    if is_guest_mode():
+        return {
+            "sessions": [], "events": [], "latestSessionId": None,
+            "latestResults": [], "resultDisplayColumns": [], "savedUsers": [],
+            "savedUserDisplayColumns": [], "userEventId": None,
+            "historySyncBatches": [], "defaultEventName": "default",
+            "defaultEventEnabled": False,
+        }
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
+    owner_id = current_account_id()
     default_event_name = get_setting(conn, "default_event_name", "default")
     default_event_enabled = get_setting(conn, "default_event_enabled", "1") == "1"
 
     events = [dict(row) for row in conn.execute("""
         SELECT id, name, description, created_at
         FROM events
+        WHERE owner_id=?
         ORDER BY id DESC
-    """).fetchall()]
+    """, (owner_id,)).fetchall()]
     if not default_event_enabled and events:
         if STATE.get("event_id") in (None, "", "__default__"):
             STATE["event_id"] = events[0]["id"]
@@ -403,9 +458,10 @@ def db_snapshot():
                s.session_name, s.csv_file, s.mode, s.draw_count, s.created_at, s.notes
         FROM raffle_sessions s
         LEFT JOIN events e ON e.id = s.event_id
+        WHERE s.owner_id=?
         ORDER BY s.id DESC
         LIMIT 50
-    """, (default_event_name, default_event_name)).fetchall()]
+    """, (default_event_name, default_event_name, owner_id)).fetchall()]
 
     latest_session_id = sessions[0]["id"] if sessions else None
     latest_payload = db_session_results(conn, latest_session_id) if latest_session_id else {
@@ -421,16 +477,17 @@ def db_snapshot():
                    SUM(h.streak_count) AS streak_count
             FROM event_participant_history h
             JOIN participants p ON p.id = h.participant_id
+            WHERE p.owner_id=?
             GROUP BY p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url
-        """).fetchall()]
+        """, (owner_id,)).fetchall()]
     else:
         baseline_rows = [dict(row) for row in conn.execute("""
             SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
                    h.join_count, h.win_count, h.streak_count
             FROM event_participant_history h
             JOIN participants p ON p.id = h.participant_id
-            WHERE h.event_id=?
-        """, (event_db_id(user_event_id),)).fetchall()]
+            WHERE h.event_id=? AND p.owner_id=?
+        """, (event_db_id(user_event_id), owner_id)).fetchall()]
     users_by_id = {}
     for row in baseline_rows:
         participant_id = row.get("id")
@@ -452,9 +509,10 @@ def db_snapshot():
                b.filename, b.sync_mode, b.row_count, b.created_at, b.undone_at
         FROM history_sync_batches b
         LEFT JOIN events e ON e.id = b.event_id
+        WHERE b.owner_id=?
         ORDER BY b.id DESC
         LIMIT 20
-    """, (default_event_name, default_event_name)).fetchall()]
+    """, (default_event_name, default_event_name, owner_id)).fetchall()]
     conn.close()
     users = list(users_by_id.values())
     users = dedupe_user_rows(users)
@@ -485,6 +543,7 @@ def build_event_export(event_id):
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
     default_name = get_setting(conn, "default_event_name", "default")
+    owner_id = current_account_id()
     if event_id in ("", None, "__all__"):
         event_name = "すべて"
         user_sql = """
@@ -494,35 +553,39 @@ def build_event_export(event_id):
                    SUM(h.streak_count) AS streak_count
             FROM event_participant_history h
             JOIN participants p ON p.id=h.participant_id
+            WHERE p.owner_id=?
             GROUP BY p.id, p.display_name, p.vrc_id, p.x_id
             ORDER BY p.display_name
         """
-        user_params = []
-        session_where = ""
-        session_params = []
+        user_params = [owner_id]
+        session_where = "WHERE s.owner_id=?"
+        session_params = [owner_id]
     else:
         db_event_id = event_db_id(event_id)
         if db_event_id == 0:
             event_name = default_name
-            session_where = "WHERE s.event_id IS NULL"
-            session_params = []
+            session_where = "WHERE s.owner_id=? AND s.event_id IS NULL"
+            session_params = [owner_id]
         else:
-            row = conn.execute("SELECT name FROM events WHERE id=?", (db_event_id,)).fetchone()
+            row = conn.execute(
+                "SELECT name FROM events WHERE id=? AND owner_id=?",
+                (db_event_id, owner_id),
+            ).fetchone()
             if not row:
                 conn.close()
                 raise ValueError("出力するEventが見つかりません。")
             event_name = row["name"]
-            session_where = "WHERE s.event_id=?"
-            session_params = [db_event_id]
+            session_where = "WHERE s.owner_id=? AND s.event_id=?"
+            session_params = [owner_id, db_event_id]
         user_sql = """
             SELECT p.display_name, p.vrc_id, p.x_id,
                    h.join_count, h.win_count, h.streak_count
             FROM event_participant_history h
             JOIN participants p ON p.id=h.participant_id
-            WHERE h.event_id=?
+            WHERE h.event_id=? AND p.owner_id=?
             ORDER BY p.display_name
         """
-        user_params = [db_event_id]
+        user_params = [db_event_id, owner_id]
 
     users = [dict(row) for row in conn.execute(user_sql, user_params).fetchall()]
     mode = "equal" if FREE_BUILD else STATE.get("mode", "linear")
@@ -704,6 +767,7 @@ def public_state(message=""):
         "historyImport": public_history_import(),
         "historySyncBatches": snapshot["historySyncBatches"],
         "allowShutdown": os.environ.get("ALLOW_SHUTDOWN", "1") == "1",
+        "guestMode": is_guest_mode(),
         "summary": {
             "total": len(STATE["records"]),
             "winners": len(STATE["last_winner_indices"]),
@@ -729,7 +793,7 @@ def run_raffle(payload):
     if not active_indices:
         raise ValueError("抽選対象がありません。除外を解除してください。")
     draw_count = int(payload.get("drawCount", 1) or 1)
-    mode = "equal" if FREE_BUILD else payload.get("mode", "linear")
+    mode = "equal" if FREE_BUILD or is_guest_mode() else payload.get("mode", "linear")
     STATE["mode"] = mode
     event_id = safe_int(payload.get("eventId"), None)
     STATE["event_id"] = event_id
@@ -770,13 +834,26 @@ def run_raffle(payload):
         if not allow_repeat:
             pool_idx.remove(chosen)
 
+    if is_guest_mode():
+        STATE["last_winner_indices"] = set(winners_idx)
+        STATE["latest_session_id"] = None
+        recalculate_probabilities()
+        return public_state(f"ゲスト抽選完了: {total}人中 {len(winners_idx)}名当選（保存なし）")
+
     now = datetime.datetime.now().isoformat()
     conn = sqlite3.connect(db_path())
+    owner_id = current_account_id()
+    if event_id and not conn.execute(
+        "SELECT 1 FROM events WHERE id=? AND owner_id=?", (event_id, owner_id)
+    ).fetchone():
+        conn.close()
+        raise ValueError("指定されたEventが見つかりません。")
     cur = conn.execute(
         "INSERT INTO raffle_sessions "
-        "(event_id,session_name,csv_file,mode,draw_count,created_at,notes)"
-        " VALUES (?,?,?,?,?,?,?)",
-        (event_id, session_name, STATE["csv_file"], mode, draw_count, now, saved_notes))
+        "(event_id,session_name,csv_file,mode,draw_count,created_at,notes,owner_id)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (event_id, session_name, STATE["csv_file"], mode, draw_count, now, saved_notes,
+         owner_id))
     session_id = cur.lastrowid
 
     participant_ids = {}
@@ -865,7 +942,7 @@ def handle_upload(filename, content):
     STATE["last_winner_indices"] = set()
     STATE["latest_session_id"] = None
     STATE["csv_file"] = filename
-    STATE["mode"] = "linear"
+    STATE["mode"] = "equal" if is_guest_mode() else "linear"
     apply_column_roles()
     recalculate_probabilities()
     return public_state(
@@ -893,18 +970,18 @@ def handle_history_upload(filename, content):
 def find_or_create_history_participant(conn, draw_id):
     row = conn.execute("""
         SELECT id FROM participants
-        WHERE lower(trim(display_name))=lower(trim(?))
+        WHERE owner_id=? AND lower(trim(display_name))=lower(trim(?))
         ORDER BY id LIMIT 1
-    """, (draw_id,)).fetchone()
+    """, (current_account_id(), draw_id)).fetchone()
     if row:
         return row[0]
     now = datetime.datetime.now().isoformat()
     cur = conn.execute("""
         INSERT INTO participants
         (display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count,
-         last_win_join_count, streak_count, created_at)
-        VALUES (?, '', '', '', '', 0, 0, 0, 0, ?)
-    """, (draw_id, now))
+         last_win_join_count, streak_count, created_at, owner_id)
+        VALUES (?, '', '', '', '', 0, 0, 0, 0, ?, ?)
+    """, (draw_id, now, current_account_id()))
     return cur.lastrowid
 
 
@@ -929,6 +1006,15 @@ def handle_history_apply(payload):
     if event_id == "__all__":
         raise ValueError("同期先Eventを選択してください。")
     target_event_id = event_db_id(event_id)
+    if target_event_id:
+        check = sqlite3.connect(db_path())
+        owned_event = check.execute(
+            "SELECT 1 FROM events WHERE id=? AND owner_id=?",
+            (target_event_id, current_account_id()),
+        ).fetchone()
+        check.close()
+        if not owned_event:
+            raise ValueError("同期先Eventが見つかりません。")
 
     aggregated = {}
     duplicate_count = 0
@@ -958,17 +1044,20 @@ def handle_history_apply(payload):
     try:
         cur = conn.execute("""
             INSERT INTO history_sync_batches
-            (event_id, filename, sync_mode, row_count, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (target_event_id, imported["filename"], sync_mode, len(aggregated), now))
+            (event_id, filename, sync_mode, row_count, created_at, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (target_event_id, imported["filename"], sync_mode, len(aggregated), now,
+              current_account_id()))
         batch_id = cur.lastrowid
         conn.execute("""
             INSERT INTO history_sync_snapshots
             (batch_id, participant_id, join_count, win_count, streak_count, updated_at)
             SELECT ?, participant_id, join_count, win_count, streak_count, updated_at
             FROM event_participant_history
-            WHERE event_id=?
-        """, (batch_id, target_event_id))
+            WHERE event_id=? AND participant_id IN (
+                SELECT id FROM participants WHERE owner_id=?
+            )
+        """, (batch_id, target_event_id, current_account_id()))
         conn.execute(
             "UPDATE history_sync_batches SET snapshot_complete=1 WHERE id=?",
             (batch_id,))
@@ -982,8 +1071,11 @@ def handle_history_apply(payload):
                 row["participant_id"]: row
                 for row in conn.execute("""
                     SELECT participant_id, join_count, win_count, streak_count
-                    FROM event_participant_history WHERE event_id=?
-                """, (target_event_id,)).fetchall()
+                    FROM event_participant_history
+                    WHERE event_id=? AND participant_id IN (
+                        SELECT id FROM participants WHERE owner_id=?
+                    )
+                """, (target_event_id, current_account_id())).fetchall()
             }
             for participant_id in set(existing) | set(imported_participants):
                 before = existing.get(participant_id)
@@ -1004,9 +1096,12 @@ def handle_history_apply(payload):
                 """, (
                     batch_id, participant_id, int(before_exists), before_join,
                     before_win, before_streak, after_join, after_win, after_streak))
-            conn.execute(
-                "DELETE FROM event_participant_history WHERE event_id=?",
-                (target_event_id,))
+            conn.execute("""
+                DELETE FROM event_participant_history
+                WHERE event_id=? AND participant_id IN (
+                    SELECT id FROM participants WHERE owner_id=?
+                )
+            """, (target_event_id, current_account_id()))
             for participant_id, counts in imported_participants.items():
                 after_join = counts["join_count"]
                 after_win = counts["win_count"]
@@ -1073,21 +1168,24 @@ def handle_history_rollback(payload):
     try:
         batch = conn.execute("""
             SELECT id, event_id, undone_at, snapshot_complete
-            FROM history_sync_batches WHERE id=?
-        """, (batch_id,)).fetchone()
+            FROM history_sync_batches WHERE id=? AND owner_id=?
+        """, (batch_id, current_account_id())).fetchone()
         if not batch or batch["undone_at"]:
             raise ValueError("この同期Batchは戻せません。")
         latest = conn.execute("""
             SELECT id FROM history_sync_batches
-            WHERE event_id=? AND undone_at IS NULL
+            WHERE event_id=? AND owner_id=? AND undone_at IS NULL
             ORDER BY id DESC LIMIT 1
-        """, (batch["event_id"],)).fetchone()
+        """, (batch["event_id"], current_account_id())).fetchone()
         if not latest or latest["id"] != batch_id:
             raise ValueError("このEventでは最新の同期Batchだけを戻せます。")
         if batch["snapshot_complete"]:
-            conn.execute(
-                "DELETE FROM event_participant_history WHERE event_id=?",
-                (batch["event_id"],))
+            conn.execute("""
+                DELETE FROM event_participant_history
+                WHERE event_id=? AND participant_id IN (
+                    SELECT id FROM participants WHERE owner_id=?
+                )
+            """, (batch["event_id"], current_account_id()))
             conn.execute("""
                 INSERT INTO event_participant_history
                 (event_id, participant_id, join_count, win_count, streak_count, updated_at)
@@ -1164,8 +1262,8 @@ def handle_session(payload):
     session = conn.execute("""
         SELECT id, session_name, csv_file, mode, draw_count, created_at, notes
         FROM raffle_sessions
-        WHERE id=?
-    """, (session_id,)).fetchone()
+        WHERE id=? AND owner_id=?
+    """, (session_id, current_account_id())).fetchone()
     if not session:
         conn.close()
         raise ValueError("指定されたセッションが見つかりません。")
@@ -1186,28 +1284,136 @@ def handle_session_delete(payload):
     if not session_id:
         raise ValueError("セッションを選択してください。")
     conn = sqlite3.connect(db_path())
-    conn.execute("DELETE FROM raffle_results WHERE session_id=?", (session_id,))
-    conn.execute("DELETE FROM submission_records WHERE session_id=?", (session_id,))
-    cur = conn.execute("DELETE FROM raffle_sessions WHERE id=?", (session_id,))
-    conn.commit()
-    conn.close()
-    if cur.rowcount == 0:
-        raise ValueError("指定されたセッションが見つかりません。")
+    conn.row_factory = sqlite3.Row
+    owner_id = current_account_id()
+    try:
+        session = conn.execute(
+            "SELECT id, event_id FROM raffle_sessions WHERE id=? AND owner_id=?",
+            (session_id, owner_id),
+        ).fetchone()
+        if not session:
+            raise ValueError("指定されたセッションが見つかりません。")
+        event_id = session["event_id"]
+        target_event_id = event_db_id(event_id)
+        joins = {
+            row["participant_id"]: row["count"]
+            for row in conn.execute("""
+                SELECT matched_participant_id AS participant_id, COUNT(*) AS count
+                FROM submission_records
+                WHERE session_id=? AND matched_participant_id IS NOT NULL
+                GROUP BY matched_participant_id
+            """, (session_id,)).fetchall()
+        }
+        wins = {
+            row["participant_id"]: row["count"]
+            for row in conn.execute("""
+                SELECT participant_id, COUNT(*) AS count
+                FROM raffle_results
+                WHERE session_id=? AND participant_id IS NOT NULL AND is_winner=1
+                GROUP BY participant_id
+            """, (session_id,)).fetchall()
+        }
+
+        conn.execute("DELETE FROM raffle_results WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM submission_records WHERE session_id=?", (session_id,))
+        conn.execute(
+            "DELETE FROM raffle_sessions WHERE id=? AND owner_id=?", (session_id, owner_id)
+        )
+
+        for participant_id in set(joins) | set(wins):
+            history = conn.execute("""
+                SELECT join_count, win_count
+                FROM event_participant_history
+                WHERE event_id=? AND participant_id=?
+            """, (target_event_id, participant_id)).fetchone()
+            if not history:
+                continue
+            join_count = max(safe_int(history["join_count"]) - joins.get(participant_id, 0), 0)
+            win_count = max(safe_int(history["win_count"]) - wins.get(participant_id, 0), 0)
+            last_win = conn.execute("""
+                SELECT MAX(s.id) AS session_id
+                FROM raffle_results r
+                JOIN raffle_sessions s ON s.id=r.session_id
+                WHERE r.participant_id=? AND r.is_winner=1 AND s.owner_id=?
+                  AND ((s.event_id IS NULL AND ? IS NULL) OR s.event_id=?)
+            """, (participant_id, owner_id, event_id, event_id)).fetchone()["session_id"]
+            if last_win:
+                streak_count = conn.execute("""
+                    SELECT COUNT(*)
+                    FROM submission_records sr
+                    JOIN raffle_sessions s ON s.id=sr.session_id
+                    WHERE sr.matched_participant_id=? AND s.owner_id=? AND s.id>?
+                      AND ((s.event_id IS NULL AND ? IS NULL) OR s.event_id=?)
+                """, (participant_id, owner_id, last_win, event_id, event_id)).fetchone()[0]
+            else:
+                streak_count = max(join_count - win_count, 0)
+            if join_count == 0 and win_count == 0:
+                conn.execute("""
+                    DELETE FROM event_participant_history
+                    WHERE event_id=? AND participant_id=?
+                """, (target_event_id, participant_id))
+            else:
+                conn.execute("""
+                    UPDATE event_participant_history
+                    SET join_count=?, win_count=?, streak_count=?, updated_at=?
+                    WHERE event_id=? AND participant_id=?
+                """, (
+                    join_count, win_count, streak_count,
+                    datetime.datetime.now().isoformat(), target_event_id, participant_id,
+                ))
+            totals = conn.execute("""
+                SELECT COALESCE(SUM(h.join_count), 0), COALESCE(SUM(h.win_count), 0),
+                       COALESCE(SUM(h.streak_count), 0)
+                FROM event_participant_history h
+                WHERE h.participant_id=?
+            """, (participant_id,)).fetchone()
+            conn.execute("""
+                UPDATE participants
+                SET join_count=?, win_count=?, streak_count=?
+                WHERE id=? AND owner_id=?
+            """, (totals[0], totals[1], totals[2], participant_id, owner_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     if STATE.get("latest_session_id") == session_id:
         STATE["latest_session_id"] = None
         STATE["last_winner_indices"] = set()
+    apply_column_roles()
+    recalculate_probabilities()
     return public_state(f"Session #{session_id} を削除しました。")
 
 
 def handle_event_select(payload):
     event_id = safe_int(payload.get("eventId"), None)
+    if event_id:
+        conn = sqlite3.connect(db_path())
+        owned = conn.execute(
+            "SELECT 1 FROM events WHERE id=? AND owner_id=?",
+            (event_id, current_account_id()),
+        ).fetchone()
+        conn.close()
+        if not owned:
+            raise ValueError("指定されたEventが見つかりません。")
     STATE["event_id"] = event_id
     return public_state("Eventを選択しました。")
 
 
 def handle_user_event(payload):
     event_id = payload.get("eventId")
-    STATE["user_event_id"] = event_id if event_id in ("__all__", "__default__") else safe_int(event_id, None)
+    parsed = event_id if event_id in ("__all__", "__default__") else safe_int(event_id, None)
+    if isinstance(parsed, int):
+        conn = sqlite3.connect(db_path())
+        owned = conn.execute(
+            "SELECT 1 FROM events WHERE id=? AND owner_id=?",
+            (parsed, current_account_id()),
+        ).fetchone()
+        conn.close()
+        if not owned:
+            raise ValueError("指定されたEventが見つかりません。")
+    STATE["user_event_id"] = parsed
     return public_state("ユーザー一覧のEventを変更しました。")
 
 
@@ -1227,23 +1433,23 @@ def handle_event_save(payload):
         return public_state(f"Event「{name}」へ名前を変更しました。")
     if event_id:
         cur = conn.execute(
-            "UPDATE events SET name=?, description=? WHERE id=?",
-            (name, description, event_id))
+            "UPDATE events SET name=?, description=? WHERE id=? AND owner_id=?",
+            (name, description, event_id, current_account_id()))
         if cur.rowcount == 0:
             conn.close()
             raise ValueError("指定されたEventが見つかりません。")
     else:
         row = conn.execute(
-            "SELECT id FROM events WHERE lower(trim(name))=lower(trim(?))",
-            (name,)
+            "SELECT id FROM events WHERE owner_id=? AND lower(trim(name))=lower(trim(?))",
+            (current_account_id(), name)
         ).fetchone()
         if row:
             event_id = row[0]
             conn.execute("UPDATE events SET description=? WHERE id=?", (description, event_id))
         else:
             cur = conn.execute(
-                "INSERT INTO events (name, description, created_at) VALUES (?,?,?)",
-                (name, description, datetime.datetime.now().isoformat()))
+                "INSERT INTO events (name, description, created_at, owner_id) VALUES (?,?,?,?)",
+                (name, description, datetime.datetime.now().isoformat(), current_account_id()))
             event_id = cur.lastrowid
     conn.commit()
     conn.close()
@@ -1259,7 +1465,8 @@ def handle_event_delete(payload):
         conn = sqlite3.connect(db_path())
         conn.row_factory = sqlite3.Row
         targets = conn.execute(
-            "SELECT id, name FROM events ORDER BY id DESC"
+            "SELECT id, name FROM events WHERE owner_id=? ORDER BY id DESC",
+            (current_account_id(),),
         ).fetchall()
         target = next(
             (row for row in targets if row["id"] == target_event_id),
@@ -1272,22 +1479,30 @@ def handle_event_delete(payload):
             INSERT INTO event_participant_history
             (event_id, participant_id, join_count, win_count, streak_count, updated_at)
             SELECT ?, participant_id, join_count, win_count, streak_count, ?
-            FROM event_participant_history WHERE event_id=0
+            FROM event_participant_history
+            WHERE event_id=0 AND participant_id IN (
+                SELECT id FROM participants WHERE owner_id=?
+            )
             ON CONFLICT(event_id, participant_id) DO UPDATE SET
                 join_count=event_participant_history.join_count+excluded.join_count,
                 win_count=event_participant_history.win_count+excluded.win_count,
                 streak_count=event_participant_history.streak_count+excluded.streak_count,
                 updated_at=excluded.updated_at
-        """, (target["id"], now))
-        conn.execute("DELETE FROM event_participant_history WHERE event_id=0")
+        """, (target["id"], now, current_account_id()))
+        conn.execute("""
+            DELETE FROM event_participant_history
+            WHERE event_id=0 AND participant_id IN (
+                SELECT id FROM participants WHERE owner_id=?
+            )
+        """, (current_account_id(),))
         conn.execute(
-            "UPDATE raffle_sessions SET event_id=? WHERE event_id IS NULL",
-            (target["id"],))
+            "UPDATE raffle_sessions SET event_id=? WHERE event_id IS NULL AND owner_id=?",
+            (target["id"], current_account_id()))
         conn.execute("""
             UPDATE history_sync_batches
             SET undone_at=COALESCE(undone_at, ?)
-            WHERE event_id=0
-        """, (now,))
+            WHERE event_id=0 AND owner_id=?
+        """, (now, current_account_id()))
         set_setting(conn, "default_event_enabled", "0")
         conn.commit()
         conn.close()
@@ -1299,20 +1514,28 @@ def handle_event_delete(payload):
     if not event_id:
         raise ValueError("Eventを選択してください。")
     conn = sqlite3.connect(db_path())
+    if not conn.execute(
+        "SELECT 1 FROM events WHERE id=? AND owner_id=?",
+        (event_id, current_account_id()),
+    ).fetchone():
+        conn.close()
+        raise ValueError("指定されたEventが見つかりません。")
     default_enabled = get_setting(conn, "default_event_enabled", "1") == "1"
     if default_enabled:
         fallback_event_id = 0
-        conn.execute("UPDATE raffle_sessions SET event_id=NULL WHERE event_id=?", (event_id,))
+        conn.execute(
+            "UPDATE raffle_sessions SET event_id=NULL WHERE event_id=? AND owner_id=?",
+            (event_id, current_account_id()))
     else:
         fallback = conn.execute(
-            "SELECT id FROM events WHERE id<>? ORDER BY id DESC LIMIT 1",
-            (event_id,)).fetchone()
+            "SELECT id FROM events WHERE id<>? AND owner_id=? ORDER BY id DESC LIMIT 1",
+            (event_id, current_account_id())).fetchone()
         if not fallback:
             conn.close()
             raise ValueError("移動先がないため、このEventは削除できません。")
         conn.execute(
-            "UPDATE raffle_sessions SET event_id=? WHERE event_id=?",
-            (fallback[0], event_id))
+            "UPDATE raffle_sessions SET event_id=? WHERE event_id=? AND owner_id=?",
+            (fallback[0], event_id, current_account_id()))
         fallback_event_id = fallback[0]
     now = datetime.datetime.now().isoformat()
     conn.execute("""
@@ -1330,9 +1553,11 @@ def handle_event_delete(payload):
     conn.execute("""
         UPDATE history_sync_batches
         SET undone_at=COALESCE(undone_at, ?)
-        WHERE event_id=?
-    """, (now, event_id))
-    cur = conn.execute("DELETE FROM events WHERE id=?", (event_id,))
+        WHERE event_id=? AND owner_id=?
+    """, (now, event_id, current_account_id()))
+    cur = conn.execute(
+        "DELETE FROM events WHERE id=? AND owner_id=?", (event_id, current_account_id())
+    )
     conn.commit()
     conn.close()
     if cur.rowcount == 0:
@@ -1345,7 +1570,7 @@ def handle_event_delete(payload):
 
 
 def handle_mode(payload):
-    mode = payload.get("mode", "linear")
+    mode = "equal" if is_guest_mode() else payload.get("mode", "linear")
     if mode not in ("equal", "linear", "double"):
         raise ValueError("確率モードが不正です。")
     STATE["mode"] = mode
@@ -1396,4 +1621,3 @@ def handle_exclude(payload):
         msg = "この応募者を抽選から除外しました。"
     recalculate_probabilities()
     return public_state(msg)
-

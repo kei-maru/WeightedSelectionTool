@@ -45,7 +45,7 @@
     h1 { margin: 0; font-size: 22px; letter-spacing: .01em; }
     .shell {
       display: grid;
-      grid-template-columns: 340px minmax(0, 1fr);
+      grid-template-columns: 390px minmax(0, 1fr);
       gap: 18px;
       padding: 18px;
       height: calc(100vh - 66px);

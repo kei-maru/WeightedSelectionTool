@@ -8,10 +8,12 @@ from contextlib import closing
 import api
 import core
 from openpyxl import load_workbook
+from services.request_context import set_request_identity
 
 
 class HistorySyncTest(unittest.TestCase):
     def setUp(self):
+        set_request_identity("local", guest=False)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_file = os.path.join(self.temp_dir.name, "test.db")
         os.environ["DB_PATH"] = self.db_file
@@ -34,6 +36,7 @@ class HistorySyncTest(unittest.TestCase):
         self.c_id = self._seed("C", 4, 0)
 
     def tearDown(self):
+        set_request_identity("local", guest=False)
         os.environ.pop("DB_PATH", None)
         self.temp_dir.cleanup()
 
@@ -166,6 +169,36 @@ class HistorySyncTest(unittest.TestCase):
 
         self.assertEqual(self._rows()["A"], (3, 2))
 
+    def test_deleting_session_rolls_back_user_statistics(self):
+        api.STATE.update({
+            "source_columns": ["ID"],
+            "id_column": "ID",
+            "records": [{
+                "raw_values": {"ID": "A"},
+                "draw_id": "A",
+                "display_name": "A",
+                "base_display_name": "A",
+                "display_fields": {},
+                "participant_id": self.a_id,
+                "matched": True,
+                "join_count": 2,
+                "win_count": 1,
+                "streak_count": 1,
+            }],
+            "csv_file": "raffle.csv",
+            "mode": "equal",
+            "event_id": None,
+            "user_event_id": "__default__",
+        })
+        result = api.run_raffle({"drawCount": 1, "mode": "equal", "eventId": ""})
+        session_id = result["latestSessionId"]
+
+        deleted = api.handle_action("/api/session/delete", {"sessionId": session_id})
+
+        self.assertEqual(self._rows()["A"], (2, 1))
+        saved = next(row for row in deleted["savedUsers"] if row["drawId"] == "A")
+        self.assertEqual((saved["join_count"], saved["win_count"]), (2, 1))
+
     def test_default_event_can_be_renamed_and_requires_another_event_to_delete(self):
         renamed = api.handle_event_save({
             "eventId": "__default__",
@@ -222,6 +255,36 @@ class HistorySyncTest(unittest.TestCase):
         self.assertEqual(workbook["Sheet1"]["A2"].value, "A")
         self.assertIsInstance(workbook["Sheet1"]["E2"].value, float)
         self.assertEqual(workbook["Sheet2"]["D2"].value, "A")
+
+    def test_saved_events_are_isolated_by_x_account(self):
+        set_request_identity("x:account-a", guest=False)
+        api.handle_event_save({"name": "A Event", "description": ""})
+        self.assertEqual([event["name"] for event in api.public_state()["events"]], ["A Event"])
+
+        set_request_identity("x:account-b", guest=False)
+        self.assertEqual(api.public_state()["events"], [])
+
+    def test_guest_raffle_does_not_create_a_session(self):
+        set_request_identity("guest:test", guest=True)
+        api.STATE.update({
+            "source_columns": ["ID"],
+            "id_column": "ID",
+            "records": [{
+                "raw_values": {"ID": "Guest"}, "draw_id": "Guest",
+                "display_name": "Guest", "base_display_name": "Guest",
+                "display_fields": {}, "participant_id": None, "matched": False,
+                "join_count": 0, "win_count": 0, "streak_count": 0,
+            }],
+            "csv_file": "guest.csv",
+            "mode": "equal",
+        })
+
+        result = api.run_raffle({"drawCount": 1, "mode": "double", "eventId": ""})
+
+        self.assertTrue(result["guestMode"])
+        self.assertEqual(result["mode"], "equal")
+        with closing(sqlite3.connect(self.db_file)) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM raffle_sessions").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

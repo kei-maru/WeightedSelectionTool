@@ -172,13 +172,27 @@ def init_db():
             FOREIGN KEY (participant_id) REFERENCES participants(id)
         )
     """)
+    for table in ("events", "participants", "raffle_sessions", "history_sync_batches"):
+        columns = [row[1] for row in c.execute(f"PRAGMA table_info({table})").fetchall()]
+        if "owner_id" not in columns:
+            c.execute(
+                f"ALTER TABLE {table} ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'local'"
+            )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_events_owner ON events(owner_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants(owner_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON raffle_sessions(owner_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_sync_batches_owner ON history_sync_batches(owner_id)")
     conn.commit()
     conn.close()
 
 
-def fuzzy_find_participant(conn, vrc_id="", vrc_url="", x_id="", x_url=""):
+def fuzzy_find_participant(
+    conn, vrc_id="", vrc_url="", x_id="", x_url="", owner_id="local"
+):
     c = conn.cursor()
-    rows = c.execute("SELECT * FROM participants").fetchall()
+    rows = c.execute(
+        "SELECT * FROM participants WHERE owner_id=?", (owner_id,)
+    ).fetchall()
     col_names = [d[0] for d in c.description]
 
     def normalize(value):
