@@ -4,7 +4,8 @@ import os
 import random
 import sqlite3
 import tempfile
-from cgi import FieldStorage
+from email.parser import BytesParser
+from email.policy import default
 
 import pandas as pd
 
@@ -29,6 +30,7 @@ STATE = {
     "csv_file": "",
     "event_id": None,
     "user_event_id": "__default__",
+    "history_import": None,
 }
 
 
@@ -86,6 +88,7 @@ def participant_stats_by_name(conn, display_name):
     ).description]
     dict_rows = [dict(zip(col_names, row)) for row in rows]
     first = dict_rows[0]
+    first["participant_ids"] = [row["id"] for row in dict_rows]
     first["join_count"] = sum(safe_int(row.get("join_count", 0)) for row in dict_rows)
     first["win_count"] = sum(safe_int(row.get("win_count", 0)) for row in dict_rows)
     first["last_win_join_count"] = max(safe_int(row.get("last_win_join_count", 0)) for row in dict_rows)
@@ -144,12 +147,15 @@ def apply_column_roles():
             if participant:
                 record["participant_id"] = participant["id"]
                 record["matched"] = True
-                record["join_count"] = participant.get("join_count", record.get("join_count", 0))
-                record["win_count"] = participant.get("win_count", record.get("win_count", 0))
+                event_stats = participant_event_totals(
+                    conn,
+                    participant.get("participant_ids", [participant["id"]]),
+                    STATE.get("event_id"))
+                record["join_count"] = event_stats["join_count"]
+                record["win_count"] = event_stats["win_count"]
                 record["last_win_join_count"] = participant.get(
                     "last_win_join_count", record.get("last_win_join_count", 0))
-                record["streak_count"] = participant.get(
-                    "streak_count", record.get("streak_count", 0))
+                record["streak_count"] = event_stats["streak_count"]
         else:
             record["display_name"] = (
                 record.get("base_display_name")
@@ -344,6 +350,29 @@ def event_where_clause(column="s.event_id", event_id=None):
     return f" WHERE {column}=?", [safe_int(event_id, None)]
 
 
+def event_db_id(event_id):
+    return 0 if event_id in ("", None, "__default__") else safe_int(event_id, 0)
+
+
+def participant_event_totals(conn, participant_ids, event_id):
+    ids = [safe_int(value, None) for value in participant_ids if safe_int(value, None)]
+    if not ids:
+        return {"join_count": 0, "win_count": 0, "streak_count": 0}
+    placeholders = ",".join("?" for _ in ids)
+    baseline = conn.execute(f"""
+        SELECT COALESCE(SUM(join_count), 0),
+               COALESCE(SUM(win_count), 0),
+               COALESCE(SUM(streak_count), 0)
+        FROM event_participant_history
+        WHERE event_id=? AND participant_id IN ({placeholders})
+    """, [event_db_id(event_id), *ids]).fetchone()
+    return {
+        "join_count": safe_int(baseline[0], 0),
+        "win_count": safe_int(baseline[1], 0),
+        "streak_count": safe_int(baseline[2], 0),
+    }
+
+
 def db_snapshot():
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
@@ -370,49 +399,48 @@ def db_snapshot():
         "displayColumns": [],
     }
 
-    where, params = event_where_clause("s.event_id", user_event_id)
-    history_rows = [dict(row) for row in conn.execute(f"""
-        SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
-               s.id AS session_id,
-               COALESCE(w.win_count, 0) AS session_win_count
-        FROM submission_records sr
-        JOIN raffle_sessions s ON s.id = sr.session_id
-        JOIN participants p ON p.id = sr.matched_participant_id
-        LEFT JOIN (
-            SELECT session_id, participant_id, COUNT(id) AS win_count
-            FROM raffle_results
-            GROUP BY session_id, participant_id
-        ) w ON w.session_id = s.id AND w.participant_id = p.id
-        {where}
-        ORDER BY s.id, sr.id
-    """, params).fetchall()]
-    conn.close()
-
+    if user_event_id in ("", None, "__all__"):
+        baseline_rows = [dict(row) for row in conn.execute("""
+            SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
+                   SUM(h.join_count) AS join_count,
+                   SUM(h.win_count) AS win_count,
+                   SUM(h.streak_count) AS streak_count
+            FROM event_participant_history h
+            JOIN participants p ON p.id = h.participant_id
+            GROUP BY p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url
+        """).fetchall()]
+    else:
+        baseline_rows = [dict(row) for row in conn.execute("""
+            SELECT p.id, p.display_name, p.vrc_id, p.vrc_url, p.x_id, p.x_url,
+                   h.join_count, h.win_count, h.streak_count
+            FROM event_participant_history h
+            JOIN participants p ON p.id = h.participant_id
+            WHERE h.event_id=?
+        """, (event_db_id(user_event_id),)).fetchall()]
     users_by_id = {}
-    for row in history_rows:
+    for row in baseline_rows:
         participant_id = row.get("id")
-        if participant_id not in users_by_id:
-            users_by_id[participant_id] = {
-                "drawId": row.get("display_name") or row.get("vrc_id") or row.get("x_id") or f"User #{row.get('id')}",
-                "displayFields": {},
-                "join_count": 0,
-                "win_count": 0,
-                "last_win_join_count": 0,
-                "streak_count": 0,
-                "current_probability": "",
-                "matched": "保存済み",
-                "status": "記録",
-                "winner": False,
-            }
-        user = users_by_id[participant_id]
-        user["join_count"] += 1
-        user["streak_count"] += 1
-        session_win_count = safe_int(row.get("session_win_count", 0))
-        if session_win_count:
-            user["win_count"] += session_win_count
-            user["last_win_join_count"] = user["join_count"]
-            user["streak_count"] = 0
-            user["winner"] = True
+        users_by_id[participant_id] = {
+            "drawId": row.get("display_name") or row.get("vrc_id") or row.get("x_id") or f"User #{participant_id}",
+            "displayFields": {},
+            "join_count": safe_int(row.get("join_count", 0)),
+            "win_count": safe_int(row.get("win_count", 0)),
+            "last_win_join_count": 0,
+            "streak_count": safe_int(row.get("streak_count", 0)),
+            "current_probability": "",
+            "matched": "同期済み",
+            "status": "履歴",
+            "winner": False,
+        }
+    batches = [dict(row) for row in conn.execute("""
+        SELECT b.id, b.event_id, CASE WHEN b.event_id=0 THEN 'default' ELSE COALESCE(e.name, 'default') END AS event_name,
+               b.filename, b.sync_mode, b.row_count, b.created_at, b.undone_at
+        FROM history_sync_batches b
+        LEFT JOIN events e ON e.id = b.event_id
+        ORDER BY b.id DESC
+        LIMIT 20
+    """).fetchall()]
+    conn.close()
     users = list(users_by_id.values())
     users = dedupe_user_rows(users)
     total = len(users)
@@ -432,6 +460,7 @@ def db_snapshot():
         "savedUsers": users,
         "savedUserDisplayColumns": [],
         "userEventId": user_event_id,
+        "historySyncBatches": batches,
     }
 
 
@@ -469,6 +498,18 @@ def db_session_results(conn, session_id):
         "sessionId": session_id,
         "results": results,
         "displayColumns": display_columns,
+    }
+
+
+def public_history_import():
+    data = STATE.get("history_import")
+    if not data:
+        return None
+    return {
+        "filename": data["filename"],
+        "columns": data["columns"],
+        "rows": data["rows"][:100],
+        "total": len(data["rows"]),
     }
 
 
@@ -543,6 +584,9 @@ def public_state(message=""):
         "savedLatestSessionId": snapshot["latestSessionId"],
         "resultDisplayColumns": snapshot["resultDisplayColumns"],
         "savedUserDisplayColumns": snapshot["savedUserDisplayColumns"],
+        "historyImport": public_history_import(),
+        "historySyncBatches": snapshot["historySyncBatches"],
+        "allowShutdown": os.environ.get("ALLOW_SHUTDOWN", "1") == "1",
         "summary": {
             "total": len(STATE["records"]),
             "winners": len(STATE["last_winner_indices"]),
@@ -619,6 +663,7 @@ def run_raffle(payload):
     session_id = cur.lastrowid
 
     participant_ids = {}
+    target_event_id = event_db_id(event_id)
     for record_idx in active_indices:
         record = records[record_idx]
         participant_id = save_participant_from_record(conn, record)
@@ -628,6 +673,15 @@ def run_raffle(payload):
         conn.execute(
             "UPDATE participants SET join_count=join_count+1,streak_count=streak_count+1 WHERE id=?",
             (participant_id,))
+        conn.execute("""
+            INSERT INTO event_participant_history
+            (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+            VALUES (?, ?, 1, 0, 1, ?)
+            ON CONFLICT(event_id, participant_id) DO UPDATE SET
+                join_count=event_participant_history.join_count+1,
+                streak_count=event_participant_history.streak_count+1,
+                updated_at=excluded.updated_at
+        """, (target_event_id, participant_id, now))
         conn.execute(
             "INSERT INTO submission_records "
             "(session_id,raw_data,matched_participant_id,created_at)"
@@ -653,6 +707,11 @@ def run_raffle(payload):
         conn.execute(
             "UPDATE participants SET win_count=win_count+1,last_win_join_count=?,streak_count=0 WHERE id=?",
             (reset_join_count, participant_id))
+        conn.execute("""
+            UPDATE event_participant_history
+            SET win_count=win_count+1, streak_count=0, updated_at=?
+            WHERE event_id=? AND participant_id=?
+        """, (now, target_event_id, participant_id))
 
     conn.commit()
     conn.close()
@@ -668,26 +727,33 @@ def read_json(headers, rfile):
     return json.loads(raw.decode("utf-8") or "{}")
 
 
-def handle_upload(headers, rfile):
-    form = FieldStorage(
-        fp=rfile,
-        headers=headers,
-        environ={
-            "REQUEST_METHOD": "POST",
-            "CONTENT_TYPE": headers.get("Content-Type"),
-        })
-    item = form["file"] if "file" in form else None
-    if item is None or not getattr(item, "filename", ""):
+def read_uploaded_dataframe(headers, rfile):
+    content_type = headers.get("Content-Type", "")
+    length = int(headers.get("Content-Length", "0"))
+    body = rfile.read(length)
+    message = BytesParser(policy=default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode() + body)
+    item = next(
+        (part for part in message.iter_parts()
+         if part.get_param("name", header="content-disposition") == "file"),
+        None)
+    filename = item.get_filename() if item is not None else ""
+    if not filename:
         raise ValueError("ファイルを選択してください。")
 
-    suffix = os.path.splitext(item.filename)[1]
+    suffix = os.path.splitext(filename)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(item.file.read())
+        tmp.write(item.get_payload(decode=True) or b"")
         tmp_path = tmp.name
     try:
         df = load_csv_or_excel(tmp_path)
     finally:
         os.unlink(tmp_path)
+    return os.path.basename(filename), df
+
+
+def handle_upload(headers, rfile):
+    filename, df = read_uploaded_dataframe(headers, rfile)
 
     STATE["records"] = build_records(df)
     STATE["source_columns"] = list(df.columns)
@@ -697,12 +763,273 @@ def handle_upload(headers, rfile):
     STATE["excluded_indices"] = set()
     STATE["last_winner_indices"] = set()
     STATE["latest_session_id"] = None
-    STATE["csv_file"] = os.path.basename(item.filename)
+    STATE["csv_file"] = filename
     STATE["mode"] = "linear"
     apply_column_roles()
     recalculate_probabilities()
     return public_state(
         f"{len(STATE['records'])}件を読み込みました。左クリックで抽選ID列を指定し、その後に表示列を指定してください。")
+
+
+def handle_history_upload(headers, rfile):
+    filename, df = read_uploaded_dataframe(headers, rfile)
+    rows = []
+    for _, row in df.iterrows():
+        values = {
+            column: "" if pd.isna(row.get(column)) else str(row.get(column)).strip()
+            for column in df.columns
+        }
+        if any(values.values()):
+            rows.append(values)
+    STATE["history_import"] = {
+        "filename": filename,
+        "columns": list(df.columns),
+        "rows": rows,
+    }
+    return public_state(f"履歴ファイルを{len(rows)}件読み込みました。3つの列を指定してください。")
+
+
+def find_or_create_history_participant(conn, draw_id):
+    row = conn.execute("""
+        SELECT id FROM participants
+        WHERE lower(trim(display_name))=lower(trim(?))
+        ORDER BY id LIMIT 1
+    """, (draw_id,)).fetchone()
+    if row:
+        return row[0]
+    now = datetime.datetime.now().isoformat()
+    cur = conn.execute("""
+        INSERT INTO participants
+        (display_name, vrc_id, vrc_url, x_id, x_url, join_count, win_count,
+         last_win_join_count, streak_count, created_at)
+        VALUES (?, '', '', '', '', 0, 0, 0, 0, ?)
+    """, (draw_id, now))
+    return cur.lastrowid
+
+
+def handle_history_apply(payload):
+    imported = STATE.get("history_import")
+    if not imported:
+        raise ValueError("先に履歴ファイルを読み込んでください。")
+    id_column = payload.get("idColumn")
+    join_column = payload.get("joinColumn")
+    win_column = payload.get("winColumn")
+    columns = set(imported["columns"])
+    if not id_column or not join_column or not win_column:
+        raise ValueError("ID列・参加回数列・当選回数列を指定してください。")
+    if len({id_column, join_column, win_column}) != 3:
+        raise ValueError("3つの列は別々に指定してください。")
+    if not {id_column, join_column, win_column}.issubset(columns):
+        raise ValueError("指定された列が見つかりません。")
+    sync_mode = payload.get("syncMode", "add")
+    if sync_mode not in ("overwrite", "add"):
+        raise ValueError("同期方法が不正です。")
+    event_id = payload.get("eventId")
+    if event_id == "__all__":
+        raise ValueError("同期先Eventを選択してください。")
+    target_event_id = event_db_id(event_id)
+
+    aggregated = {}
+    duplicate_count = 0
+    for row in imported["rows"]:
+        draw_id = str(row.get(id_column, "")).strip()
+        if not draw_id:
+            continue
+        join_count = safe_int(row.get(join_column), 0)
+        win_count = safe_int(row.get(win_column), 0)
+        if join_count < 0 or win_count < 0:
+            raise ValueError(f"{draw_id}: 回数は0以上にしてください。")
+        if win_count > join_count:
+            raise ValueError(f"{draw_id}: 当選回数は参加回数以下にしてください。")
+        current = aggregated.get(draw_id)
+        if current:
+            duplicate_count += 1
+            current["join_count"] = max(current["join_count"], join_count)
+            current["win_count"] = max(current["win_count"], win_count)
+        else:
+            aggregated[draw_id] = {"join_count": join_count, "win_count": win_count}
+    if not aggregated:
+        raise ValueError("同期できるユーザーがありません。")
+
+    now = datetime.datetime.now().isoformat()
+    conn = sqlite3.connect(db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute("""
+            INSERT INTO history_sync_batches
+            (event_id, filename, sync_mode, row_count, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (target_event_id, imported["filename"], sync_mode, len(aggregated), now))
+        batch_id = cur.lastrowid
+        conn.execute("""
+            INSERT INTO history_sync_snapshots
+            (batch_id, participant_id, join_count, win_count, streak_count, updated_at)
+            SELECT ?, participant_id, join_count, win_count, streak_count, updated_at
+            FROM event_participant_history
+            WHERE event_id=?
+        """, (batch_id, target_event_id))
+        conn.execute(
+            "UPDATE history_sync_batches SET snapshot_complete=1 WHERE id=?",
+            (batch_id,))
+        imported_participants = {
+            find_or_create_history_participant(conn, draw_id): counts
+            for draw_id, counts in aggregated.items()
+        }
+
+        if sync_mode == "overwrite":
+            existing = {
+                row["participant_id"]: row
+                for row in conn.execute("""
+                    SELECT participant_id, join_count, win_count, streak_count
+                    FROM event_participant_history WHERE event_id=?
+                """, (target_event_id,)).fetchall()
+            }
+            for participant_id in set(existing) | set(imported_participants):
+                before = existing.get(participant_id)
+                counts = imported_participants.get(participant_id)
+                before_exists = before is not None
+                before_join = safe_int(before["join_count"], 0) if before else 0
+                before_win = safe_int(before["win_count"], 0) if before else 0
+                before_streak = safe_int(before["streak_count"], 0) if before else 0
+                after_join = counts["join_count"] if counts else 0
+                after_win = counts["win_count"] if counts else 0
+                after_streak = max(after_join - after_win, 0) if counts else 0
+                conn.execute("""
+                    INSERT INTO history_sync_changes
+                    (batch_id, participant_id, before_exists, before_join_count,
+                     before_win_count, before_streak, after_join_count,
+                     after_win_count, after_streak)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    batch_id, participant_id, int(before_exists), before_join,
+                    before_win, before_streak, after_join, after_win, after_streak))
+            conn.execute(
+                "DELETE FROM event_participant_history WHERE event_id=?",
+                (target_event_id,))
+            for participant_id, counts in imported_participants.items():
+                after_join = counts["join_count"]
+                after_win = counts["win_count"]
+                after_streak = max(after_join - after_win, 0)
+                conn.execute("""
+                    INSERT INTO event_participant_history
+                    (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (target_event_id, participant_id, after_join, after_win, after_streak, now))
+        else:
+            for participant_id, counts in imported_participants.items():
+                before = conn.execute("""
+                    SELECT join_count, win_count, streak_count
+                    FROM event_participant_history
+                    WHERE event_id=? AND participant_id=?
+                """, (target_event_id, participant_id)).fetchone()
+                before_exists = before is not None
+                before_join = safe_int(before["join_count"], 0) if before else 0
+                before_win = safe_int(before["win_count"], 0) if before else 0
+                before_streak = safe_int(before["streak_count"], 0) if before else 0
+                after_join = before_join + counts["join_count"]
+                after_win = before_win + counts["win_count"]
+                after_streak = max(after_join - after_win, 0)
+                conn.execute("""
+                    INSERT INTO event_participant_history
+                    (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(event_id, participant_id) DO UPDATE SET
+                        join_count=excluded.join_count,
+                        win_count=excluded.win_count,
+                        streak_count=excluded.streak_count,
+                        updated_at=excluded.updated_at
+                """, (target_event_id, participant_id, after_join, after_win, after_streak, now))
+                conn.execute("""
+                    INSERT INTO history_sync_changes
+                    (batch_id, participant_id, before_exists, before_join_count,
+                     before_win_count, before_streak, after_join_count,
+                     after_win_count, after_streak)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    batch_id, participant_id, int(before_exists), before_join,
+                    before_win, before_streak, after_join, after_win, after_streak))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    STATE["history_import"] = None
+    STATE["user_event_id"] = "__default__" if target_event_id == 0 else target_event_id
+    apply_column_roles()
+    recalculate_probabilities()
+    duplicate_note = f" / 重複ID {duplicate_count}件は最大値でまとめました。" if duplicate_count else ""
+    mode_label_text = "追加" if sync_mode == "add" else "上書き"
+    return public_state(f"{len(aggregated)}名の履歴を{mode_label_text}しました。Batch #{batch_id}{duplicate_note}")
+
+
+def handle_history_rollback(payload):
+    batch_id = safe_int(payload.get("batchId"), None)
+    if not batch_id:
+        raise ValueError("戻す同期Batchを選択してください。")
+    conn = sqlite3.connect(db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        batch = conn.execute("""
+            SELECT id, event_id, undone_at, snapshot_complete
+            FROM history_sync_batches WHERE id=?
+        """, (batch_id,)).fetchone()
+        if not batch or batch["undone_at"]:
+            raise ValueError("この同期Batchは戻せません。")
+        latest = conn.execute("""
+            SELECT id FROM history_sync_batches
+            WHERE event_id=? AND undone_at IS NULL
+            ORDER BY id DESC LIMIT 1
+        """, (batch["event_id"],)).fetchone()
+        if not latest or latest["id"] != batch_id:
+            raise ValueError("このEventでは最新の同期Batchだけを戻せます。")
+        if batch["snapshot_complete"]:
+            conn.execute(
+                "DELETE FROM event_participant_history WHERE event_id=?",
+                (batch["event_id"],))
+            conn.execute("""
+                INSERT INTO event_participant_history
+                (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+                SELECT ?, participant_id, join_count, win_count, streak_count, updated_at
+                FROM history_sync_snapshots
+                WHERE batch_id=?
+            """, (batch["event_id"], batch_id))
+        else:
+            changes = conn.execute("""
+                SELECT * FROM history_sync_changes WHERE batch_id=? ORDER BY id DESC
+            """, (batch_id,)).fetchall()
+            for change in changes:
+                if change["before_exists"]:
+                    conn.execute("""
+                        INSERT INTO event_participant_history
+                        (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(event_id, participant_id) DO UPDATE SET
+                            join_count=excluded.join_count,
+                            win_count=excluded.win_count,
+                            streak_count=excluded.streak_count,
+                            updated_at=excluded.updated_at
+                    """, (
+                        batch["event_id"], change["participant_id"],
+                        change["before_join_count"], change["before_win_count"],
+                        change["before_streak"], datetime.datetime.now().isoformat()))
+                else:
+                    conn.execute("""
+                        DELETE FROM event_participant_history
+                        WHERE event_id=? AND participant_id=?
+                    """, (batch["event_id"], change["participant_id"]))
+        conn.execute(
+            "UPDATE history_sync_batches SET undone_at=? WHERE id=?",
+            (datetime.datetime.now().isoformat(), batch_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    apply_column_roles()
+    recalculate_probabilities()
+    return public_state(f"同期Batch #{batch_id} を元に戻しました。")
 
 
 def handle_roles(payload):
@@ -891,6 +1218,8 @@ def handle_exclude(payload):
 def handle_api(path, headers, rfile):
     if path == "/api/upload":
         return handle_upload(headers, rfile)
+    if path == "/api/history/upload":
+        return handle_history_upload(headers, rfile)
 
     payload = read_json(headers, rfile)
     routes = {
@@ -904,6 +1233,8 @@ def handle_api(path, headers, rfile):
         "/api/event/save": lambda: handle_event_save(payload),
         "/api/event/delete": lambda: handle_event_delete(payload),
         "/api/user-event": lambda: handle_user_event(payload),
+        "/api/history/apply": lambda: handle_history_apply(payload),
+        "/api/history/rollback": lambda: handle_history_rollback(payload),
         "/api/mode": lambda: handle_mode(payload),
         "/api/special": lambda: handle_special(payload),
         "/api/exclude": lambda: handle_exclude(payload),

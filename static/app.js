@@ -8,11 +8,17 @@ const state = {
       mode: "linear", modeLabel: "ゆるやか加重",
       specialRules: [], columnValues: {},
       excludedIndices: [],
+      historyImport: null, historySyncBatches: [], allowShutdown: true,
       calculationSummary: "", selectedCalculationSummary: "",
       summary: { total: 0, winners: 0, idReady: false, displayReady: false }
     };
     let activeTab = "select";
     let specialColumn = null;
+    let historyRoles = { idColumn: null, joinColumn: null, winColumn: null };
+    let historyBusy = false;
+    let historyMode = "add";
+    let historyMessage = "";
+    let roleBusy = false;
     let isShuttingDown = false;
     const $ = (id) => document.getElementById(id);
     function setStatus(text) { $("status").textContent = text || "待機中"; }
@@ -63,6 +69,9 @@ const state = {
         ).join("");
         $("eventSelect").value = state.eventId || "";
       }
+      document.querySelectorAll(".exitAction").forEach(button => {
+        button.style.display = state.allowShutdown ? "" : "none";
+      });
     }
     function mergeState(data, nextTab) {
       Object.assign(state, {
@@ -89,6 +98,9 @@ const state = {
         modeLabel: data.modeLabel || state.modeLabel || "ゆるやか加重",
         specialRules: data.specialRules || [],
         excludedIndices: data.excludedIndices || [],
+        historyImport: data.historyImport || null,
+        historySyncBatches: data.historySyncBatches || [],
+        allowShutdown: data.allowShutdown !== false,
         columnValues: data.columnValues || {},
         calculationSummary: data.calculationSummary || state.calculationSummary || "",
         selectedCalculationSummary: "",
@@ -108,7 +120,7 @@ const state = {
           <div>1. 抽選に使うID列を左クリックしてください。選択された列は<span class="blueText">青色</span>になります。</div>
           <div>2. 結果に表示したい列を左クリックしてください。表示列は<span class="greenText">緑色</span>になります。</div>
           <div>3. 未選択の列を右クリックすると、<span class="orangeText">特別条件</span>を設定できます。条件に合う応募者の確率が上がります。</div>
-          <div>4. 行をクリックすると、その応募者を抽選から除外できます。除外行は<span class="redText">赤色</span>になります。</div>`;
+          <div>4. 左端の「除外」をクリックすると、その応募者を抽選から外せます。除外行は<span class="redText">赤色</span>になります。</div>`;
       } else if (activeTab === "events") {
         $("guide").style.display = "";
         $("panelTitle").textContent = "Event編集";
@@ -132,7 +144,7 @@ const state = {
     }
     function renderSelection() {
       if (!state.rows.length) return '<div class="empty">CSV / Excel を読み込んでください。</div>';
-      const headers = state.columns.map(col => {
+      const headers = ['<th class="rowActionHead">除外</th>', ...state.columns.map(col => {
         const special = state.specialRules.find(rule => rule.column === col);
         const badge = col === state.idColumn
           ? " [抽選ID]"
@@ -141,10 +153,13 @@ const state = {
               : special
               ? ` [特別: ${special.value} ×${special.multiplier}]`
               : "";
-        return `<th class="${colClass(col)}" data-col="${escapeHtml(col)}">${escapeHtml(col + badge)}</th>`;
-      });
-      const body = state.rows.map(row => `<tr class="${row.excluded ? "excludedRow" : ""}" data-row="${row.index}">${state.columns.map(col =>
-        `<td class="${cellClass(col, row)}">${escapeHtml(row.raw[col])}</td>`).join("")}</tr>`).join("");
+        return `<th class="${colClass(col)}" data-col="${escapeHtml(col)}" title="クリックで列を指定">${escapeHtml(col + badge)}</th>`;
+      })];
+      const body = state.rows.map(row => `<tr class="${row.excluded ? "excludedRow" : ""}" data-row="${row.index}">
+        <td class="rowActionCell" data-row-action="exclude" title="クリックで抽選から除外">${row.excluded ? "除外中" : "除外"}</td>
+        ${state.columns.map(col =>
+          `<td class="${cellClass(col, row)}" data-col="${escapeHtml(col)}" title="クリックで列を指定">${escapeHtml(row.raw[col])}</td>`
+        ).join("")}</tr>`).join("");
       return table(headers, body, "selectable");
     }
     function renderResults() {
@@ -239,7 +254,7 @@ const state = {
               </div>
             </div>
             <div class="modalActions">
-              <button class="primary" type="button" id="eventEditSave">保存</button>
+              <button class="primary" type="button" id="eventEditSave">追加</button>
               <button class="soft" type="button" id="eventEditReset">入力をクリア</button>
             </div>
           </div>
@@ -257,6 +272,7 @@ const state = {
           <option value="__default__" ${String(state.userEventId || "") === "__default__" ? "selected" : ""}>default</option>
           ${state.events.map(event => `<option value="${event.id}" ${String(state.userEventId || "") === String(event.id) ? "selected" : ""}>${escapeHtml(event.name)}</option>`).join("")}
         </select>
+        <button id="historySyncOpen" class="soft" type="button">データ同期</button>
       </div>`;
       if (!rows.length) return selector + '<div class="empty">このEventの保存済みユーザーがありません。抽選を実行すると追加されます。</div>';
       const headers = ["抽選ID", ...displayColumns, "参加回数", "当選回数", "重み", "現在確率"]
@@ -271,12 +287,106 @@ const state = {
       </tr>`).join("");
       return selector + table(headers, body);
     }
+    function historyColumnClass(col) {
+      if (col === historyRoles.idColumn) return "historyIdCol";
+      if (col === historyRoles.joinColumn) return "historyJoinCol";
+      if (col === historyRoles.winColumn) return "historyWinCol";
+      return "";
+    }
+    function renderHistoryModal() {
+      const currentEvent = $("historyEvent").value;
+      const currentMode = $("historyMode").value || historyMode;
+      const eventOptions = [
+        '<option value="__default__">default</option>',
+        ...state.events.map(event => `<option value="${event.id}">${escapeHtml(event.name)}</option>`)
+      ].join("");
+      $("historyEvent").innerHTML = eventOptions;
+      const preferredEvent = state.userEventId && state.userEventId !== "__all__"
+        ? state.userEventId
+        : state.eventId || "__default__";
+      $("historyEvent").value = currentEvent || preferredEvent;
+      historyMode = currentMode || "add";
+      $("historyMode").value = historyMode;
+
+      const imported = state.historyImport;
+      if (!imported) {
+        $("historyPreview").innerHTML = '<div class="empty">履歴ファイルを選択してください。</div>';
+      } else {
+        const headers = imported.columns.map(col =>
+          `<th data-history-col="${escapeHtml(col)}" class="${historyColumnClass(col)}">${escapeHtml(col)}</th>`);
+        const body = imported.rows.map(row => `<tr>${imported.columns.map(col =>
+          `<td class="${historyColumnClass(col)}">${escapeHtml(row[col])}</td>`).join("")}</tr>`).join("");
+        $("historyPreview").innerHTML = table(headers, body, "historyTable");
+      }
+      $("historyApply").disabled = !imported
+        || !historyRoles.idColumn || !historyRoles.joinColumn || !historyRoles.winColumn;
+      const batches = state.historySyncBatches || [];
+      $("historyBatches").innerHTML = batches.length
+        ? `<strong>同期履歴</strong>${batches.map(batch => `<div class="historyBatch">
+            <span>#${batch.id} / ${escapeHtml(batch.event_name)} / ${escapeHtml(batch.filename)} / ${escapeHtml(batch.sync_mode)} / ${escapeHtml(shortDate(batch.created_at))}</span>
+            ${batch.undone_at
+              ? '<span class="hint">取消済み</span>'
+              : `<button class="tinyButton historyRollback" data-batch="${batch.id}" type="button" ${historyBusy ? "disabled" : ""}>元に戻す</button>`}
+          </div>`).join("")}`
+        : "";
+      $("historyApply").textContent = historyBusy ? "同期中..." : "同期を実行";
+      $("historyApply").disabled = $("historyApply").disabled || historyBusy;
+      $("historyUploadButton").disabled = historyBusy;
+      $("historyStatus").textContent = historyMessage || (imported
+        ? "ID列・参加回数列・当選回数列をそれぞれ選択してください。"
+        : "ファイルを選び、3つの列を順番に指定してください。");
+      $("historyStatus").classList.toggle("error", historyMessage.startsWith("エラー:"));
+      $("historyStatus").classList.toggle("busy", historyBusy);
+    }
+    function chooseHistoryColumn(col) {
+      if (historyRoles.idColumn === col) historyRoles.idColumn = null;
+      else if (historyRoles.joinColumn === col) historyRoles.joinColumn = null;
+      else if (historyRoles.winColumn === col) historyRoles.winColumn = null;
+      else if (!historyRoles.idColumn) historyRoles.idColumn = col;
+      else if (!historyRoles.joinColumn) historyRoles.joinColumn = col;
+      else if (!historyRoles.winColumn) historyRoles.winColumn = col;
+      renderHistoryModal();
+    }
+    function openHistoryModal() {
+      historyRoles = { idColumn: null, joinColumn: null, winColumn: null };
+      historyMode = "add";
+      historyMessage = "";
+      $("historyMode").value = "add";
+      renderHistoryModal();
+      $("historyModal").classList.add("open");
+    }
+    function closeHistoryModal() {
+      $("historyModal").classList.remove("open");
+    }
+    async function rollbackHistory(batchId) {
+      if (!confirm(`同期Batch #${batchId} を元に戻しますか？`)) return;
+      historyBusy = true;
+      historyMessage = `同期Batch #${batchId} を元に戻しています...`;
+      renderHistoryModal();
+      setStatus(`同期Batch #${batchId} を元に戻しています...`);
+      try {
+        const data = await postJson("/api/history/rollback", { batchId });
+        mergeState(data, "users");
+        historyMessage = data.message || `同期Batch #${batchId} を元に戻しました。`;
+        renderHistoryModal();
+      } catch (err) {
+        historyMessage = `エラー: ${err.message}`;
+        setStatus(err.message);
+      } finally {
+        historyBusy = false;
+        renderHistoryModal();
+      }
+    }
     function bindColumnEvents() {
-      document.querySelectorAll("th[data-col]").forEach(th => {
-        th.addEventListener("click", () => chooseColumn(th.dataset.col));
-        th.addEventListener("contextmenu", event => {
+      document.querySelectorAll(".selectable [data-col]").forEach(cell => {
+        cell.addEventListener("click", event => {
+          event.stopPropagation();
+          chooseColumn(cell.dataset.col);
+        });
+        cell.addEventListener("contextmenu", event => {
           event.preventDefault();
-          handleColumnContext(th.dataset.col);
+          event.stopPropagation();
+          handleColumnContext(cell.dataset.col);
         });
       });
     }
@@ -289,6 +399,9 @@ const state = {
       });
     }
     function bindEventEditorEvents() {
+      if ($("historySyncOpen")) {
+        $("historySyncOpen").addEventListener("click", openHistoryModal);
+      }
       if ($("userEventSelect")) {
         $("userEventSelect").addEventListener("change", async () => {
           try {
@@ -341,10 +454,11 @@ const state = {
       });
     }
     function bindRowEvents() {
-      document.querySelectorAll("tbody tr[data-row]").forEach(row => {
-        row.addEventListener("click", event => {
-          if (event.target.closest("button")) return;
-          row.classList.toggle("excludedRow");
+      document.querySelectorAll("[data-row-action='exclude']").forEach(cell => {
+        cell.addEventListener("click", event => {
+          event.stopPropagation();
+          const row = cell.closest("tr[data-row]");
+          if (!row) return;
           toggleExclude(row.dataset.row);
         });
       });
@@ -374,26 +488,37 @@ const state = {
       return data;
     }
     async function chooseColumn(col) {
-      if (!col) return;
+      if (!col || roleBusy) return;
       let idColumn = state.idColumn;
       let displayColumns = [...state.displayColumns];
       if (col === idColumn) {
         idColumn = null;
-      } else if (displayColumns.includes(col)) {
-        displayColumns = displayColumns.filter(c => c !== col);
       } else if (!idColumn) {
         idColumn = col;
+        displayColumns = displayColumns.filter(c => c !== col);
+      } else if (displayColumns.includes(col)) {
         displayColumns = displayColumns.filter(c => c !== col);
       } else {
         displayColumns.push(col);
       }
-      mergeState(await postJson("/api/roles", { idColumn, displayColumns }), "select");
+      await updateColumnRoles(idColumn, displayColumns);
     }
     async function cancelColumn(col) {
-      if (!col) return;
+      if (!col || roleBusy) return;
       const idColumn = state.idColumn === col ? null : state.idColumn;
       const displayColumns = state.displayColumns.filter(c => c !== col);
-      mergeState(await postJson("/api/roles", { idColumn, displayColumns }), "select");
+      await updateColumnRoles(idColumn, displayColumns);
+    }
+    async function updateColumnRoles(idColumn, displayColumns) {
+      roleBusy = true;
+      setStatus("列設定を更新しています...");
+      try {
+        mergeState(await postJson("/api/roles", { idColumn, displayColumns }), "select");
+      } catch (err) {
+        setStatus(`列設定エラー: ${err.message}`);
+      } finally {
+        roleBusy = false;
+      }
     }
     async function handleColumnContext(col) {
       if (!col) return;
@@ -469,9 +594,90 @@ const state = {
       fileInput.value = "";
       mergeState(data, "select");
     }
+    async function uploadHistoryFile() {
+      const fileInput = $("historyFile");
+      if (!fileInput.files.length) return;
+      const form = new FormData();
+      form.append("file", fileInput.files[0]);
+      setStatus("履歴ファイルを読み込み中...");
+      historyMessage = "履歴ファイルを読み込んでいます...";
+      renderHistoryModal();
+      try {
+        const res = await fetch("/api/history/upload", { method: "POST", body: form });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "読み込みに失敗しました");
+        historyRoles = { idColumn: null, joinColumn: null, winColumn: null };
+        mergeState(data, "users");
+        historyMessage = `${data.historyImport?.rows?.length || 0}行を読み込みました。3つの列を指定してください。`;
+        renderHistoryModal();
+      } catch (err) {
+        historyMessage = `エラー: ${err.message}`;
+        setStatus(err.message);
+        renderHistoryModal();
+      } finally {
+        fileInput.value = "";
+      }
+    }
     $("uploadForm").addEventListener("submit", event => event.preventDefault());
     $("uploadButton").addEventListener("click", () => $("csvFile").click());
     $("csvFile").addEventListener("change", uploadSelectedFile);
+    $("historyUploadButton").addEventListener("click", () => $("historyFile").click());
+    $("historyFile").addEventListener("change", uploadHistoryFile);
+    $("historyCancel").addEventListener("click", closeHistoryModal);
+    $("historyModal").addEventListener("click", event => {
+      if (event.target === $("historyModal")) closeHistoryModal();
+    });
+    $("historyMode").addEventListener("change", () => {
+      historyMode = $("historyMode").value;
+      historyMessage = historyMode === "overwrite"
+        ? "上書き: このEventの現在の一覧を削除し、読み込んだ内容に入れ替えます。"
+        : "追加: 読み込んだ回数を、このEventの現在の回数に足します。";
+      renderHistoryModal();
+    });
+    $("historyModal").addEventListener("click", event => {
+      const column = event.target.closest("[data-history-col]");
+      if (column) {
+        event.stopPropagation();
+        chooseHistoryColumn(column.dataset.historyCol);
+        return;
+      }
+      const rollback = event.target.closest(".historyRollback");
+      if (rollback) {
+        event.stopPropagation();
+        rollbackHistory(rollback.dataset.batch);
+      }
+    });
+    $("historyApply").addEventListener("click", async () => {
+      if (historyBusy) return;
+      if (!state.historyImport || !historyRoles.idColumn || !historyRoles.joinColumn || !historyRoles.winColumn) {
+        historyMessage = "エラー: ID列・参加回数列・当選回数列をすべて指定してください。";
+        renderHistoryModal();
+        return;
+      }
+      historyBusy = true;
+      historyMode = $("historyMode").value || "add";
+      historyMessage = historyMode === "overwrite" ? "現在の一覧を入れ替えています..." : "履歴を追加しています...";
+      renderHistoryModal();
+      setStatus("履歴を同期しています...");
+      try {
+        const data = await postJson("/api/history/apply", {
+          eventId: $("historyEvent").value,
+          syncMode: historyMode,
+          idColumn: historyRoles.idColumn,
+          joinColumn: historyRoles.joinColumn,
+          winColumn: historyRoles.winColumn
+        });
+        mergeState(data, "users");
+        historyMessage = data.message || "同期が完了しました。";
+        closeHistoryModal();
+      } catch (err) {
+        historyMessage = `エラー: ${err.message}`;
+        setStatus(err.message);
+      } finally {
+        historyBusy = false;
+        renderHistoryModal();
+      }
+    });
     $("eventSelect").addEventListener("change", async () => {
       try {
         mergeState(await postJson("/api/event/select", { eventId: $("eventSelect").value }), activeTab);
@@ -545,7 +751,7 @@ const state = {
       });
     });
     window.addEventListener("beforeunload", event => {
-      if (isShuttingDown) return;
+      if (isShuttingDown || !state.allowShutdown) return;
       event.preventDefault();
       event.returnValue = "ページを閉じるとローカルサーバーを終了します。";
     });

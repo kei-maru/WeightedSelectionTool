@@ -7,6 +7,9 @@ import pandas as pd
 
 FREE_BUILD = False
 def db_path() -> str:
+    configured = os.environ.get("DB_PATH")
+    if configured:
+        return os.path.abspath(configured)
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
     else:
@@ -85,6 +88,63 @@ def init_db():
             matched_participant_id INTEGER,
             created_at             TEXT,
             FOREIGN KEY (session_id) REFERENCES raffle_sessions(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS event_participant_history (
+            event_id       INTEGER NOT NULL DEFAULT 0,
+            participant_id INTEGER NOT NULL,
+            join_count     INTEGER NOT NULL DEFAULT 0,
+            win_count      INTEGER NOT NULL DEFAULT 0,
+            streak_count   INTEGER NOT NULL DEFAULT 0,
+            updated_at     TEXT,
+            PRIMARY KEY (event_id, participant_id),
+            FOREIGN KEY (participant_id) REFERENCES participants(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS history_sync_batches (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id   INTEGER NOT NULL DEFAULT 0,
+            filename   TEXT,
+            sync_mode  TEXT,
+            row_count  INTEGER DEFAULT 0,
+            created_at TEXT,
+            undone_at  TEXT
+        )
+    """)
+    batch_cols = [r[1] for r in c.execute("PRAGMA table_info(history_sync_batches)").fetchall()]
+    if "snapshot_complete" not in batch_cols:
+        c.execute(
+            "ALTER TABLE history_sync_batches "
+            "ADD COLUMN snapshot_complete INTEGER NOT NULL DEFAULT 0")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS history_sync_snapshots (
+            batch_id       INTEGER NOT NULL,
+            participant_id INTEGER NOT NULL,
+            join_count     INTEGER NOT NULL DEFAULT 0,
+            win_count      INTEGER NOT NULL DEFAULT 0,
+            streak_count   INTEGER NOT NULL DEFAULT 0,
+            updated_at     TEXT,
+            PRIMARY KEY (batch_id, participant_id),
+            FOREIGN KEY (batch_id) REFERENCES history_sync_batches(id),
+            FOREIGN KEY (participant_id) REFERENCES participants(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS history_sync_changes (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id          INTEGER NOT NULL,
+            participant_id    INTEGER NOT NULL,
+            before_exists     INTEGER NOT NULL DEFAULT 0,
+            before_join_count INTEGER NOT NULL DEFAULT 0,
+            before_win_count  INTEGER NOT NULL DEFAULT 0,
+            before_streak     INTEGER NOT NULL DEFAULT 0,
+            after_join_count  INTEGER NOT NULL DEFAULT 0,
+            after_win_count   INTEGER NOT NULL DEFAULT 0,
+            after_streak      INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (batch_id) REFERENCES history_sync_batches(id),
+            FOREIGN KEY (participant_id) REFERENCES participants(id)
         )
     """)
     conn.commit()

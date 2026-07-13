@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google form抽選ツール Local Web</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=20260713-4">
 </head>
 <body>
   <header>
@@ -93,7 +93,41 @@
       </div>
     </div>
   </div>
+  <div class="modalOverlay" id="historyModal">
+    <div class="modal historyModal">
+      <h2>以前の履歴を同期</h2>
+      <div class="historyControls">
+        <div>
+          <label>同期先Event</label>
+          <select id="historyEvent"></select>
+        </div>
+        <div>
+          <label>同期方法</label>
+          <select id="historyMode">
+            <option value="add" selected>追加（現在の回数に足す）</option>
+            <option value="overwrite">上書き（現在の一覧を入れ替える）</option>
+          </select>
+        </div>
+      </div>
+      <input id="historyFile" type="file" accept=".csv,.xls,.xlsx" hidden>
+      <button id="historyUploadButton" class="soft" type="button">CSV / Excel を選択</button>
+      <div class="historyGuide">
+        <span class="historyIdLegend">1. ID列</span>
+        <span class="historyJoinLegend">2. 参加回数列</span>
+        <span class="historyWinLegend">3. 当選回数列</span>
+      </div>
+      <div class="historyPreview" id="historyPreview">
+        <div class="empty">履歴ファイルを選択してください。</div>
+      </div>
+      <div class="modalStatus" id="historyStatus" aria-live="polite">ファイルを選び、3つの列を順番に指定してください。</div>
+      <div class="modalActions">
+        <button class="primary" type="button" id="historyApply" disabled>同期を実行</button>
+        <button class="danger" type="button" id="historyCancel">閉じる</button>
+      </div>
+      <div class="historyBatches" id="historyBatches"></div>
+    </div>
+  </div>
 
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20260713-4" defer></script>
 </body>
 </html>

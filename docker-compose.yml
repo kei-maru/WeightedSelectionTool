@@ -1,0 +1,15 @@
+services:
+  raffle:
+    build: .
+    container_name: google-form-raffle
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8765
+      OPEN_BROWSER: "0"
+      ALLOW_SHUTDOWN: "0"
+      DB_PATH: /app/data/vrc_raffle.db

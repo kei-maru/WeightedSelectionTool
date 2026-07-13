@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -10,8 +11,10 @@ from api import handle_api
 from core import init_db
 
 
-HOST = "127.0.0.1"
-START_PORT = 8765
+HOST = os.environ.get("APP_HOST", "127.0.0.1")
+START_PORT = int(os.environ.get("APP_PORT", "8765"))
+OPEN_BROWSER = os.environ.get("OPEN_BROWSER", "1") == "1"
+ALLOW_SHUTDOWN = os.environ.get("ALLOW_SHUTDOWN", "1") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 STATIC_TYPES = {
@@ -58,6 +61,7 @@ class LocalWebHandler(BaseHTTPRequestHandler):
         content_type = STATIC_TYPES.get(os.path.splitext(path)[1], "application/octet-stream")
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -65,6 +69,9 @@ class LocalWebHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/shutdown":
+            if not ALLOW_SHUTDOWN:
+                self.send_json({"ok": False, "error": "サーバー上では終了操作を利用できません。"}, status=403)
+                return
             self.send_json({"ok": True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
@@ -75,6 +82,7 @@ class LocalWebHandler(BaseHTTPRequestHandler):
         except KeyError:
             self.send_error(404)
         except Exception as exc:
+            traceback.print_exc()
             self.send_json({"ok": False, "error": str(exc)}, status=400)
 
 
@@ -92,7 +100,8 @@ def main():
     server = make_server()
     url = f"http://{HOST}:{server.server_port}/"
     print(f"Local web app: {url}", flush=True)
-    threading.Thread(target=lambda: (time.sleep(0.4), webbrowser.open(url)), daemon=True).start()
+    if OPEN_BROWSER:
+        threading.Thread(target=lambda: (time.sleep(0.4), webbrowser.open(url)), daemon=True).start()
     try:
         server.serve_forever()
     finally:
