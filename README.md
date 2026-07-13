@@ -310,12 +310,14 @@ ALLOWED_X_USERNAMES=example_user,staff_account
 
 access token は DB と Cookie に保存しません。`auth_users` には X ユーザー ID、username、表示名、画像 URL、ログイン日時だけを保存します。`AUTH_REQUIRED=0` のローカル起動ではログインなしで利用できます。
 
-ログイン画面には次の2つの入口があります。
+トップページはログインなしで直接開きます。
 
-- `Xでログイン`: 全機能を利用でき、Event、ユーザー履歴、抽選結果、同期履歴は X アカウントごとに保存されます。
-- `保存せずに1回だけ抽選`: 均等確率と特別条件を利用できます。抽選結果や参加回数は DB に保存されません。
+- 未ログイン: `単発抽選モード` になります。均等確率と特別条件を利用でき、抽選結果や参加回数は DB に保存されません。
+- X ログイン後: `履歴保存モード` になります。Event、ユーザー履歴、抽選結果、同期履歴は X アカウントごとに保存されます。
 
-Docker を再起動しただけでは、X の Client ID がないためログイン画面は有効になりません。`.env` に `AUTH_REQUIRED=1`、`X_CLIENT_ID`、`X_REDIRECT_URI`、`SESSION_SECRET` を設定してから再構築してください。
+右上の `Xでログイン` から認証します。ログイン後は同じ主画面へ戻り、右上に X のアイコンと名前が表示されます。
+
+Docker を再起動しただけでは、X の Client ID がないため X ログインは有効になりません。`.env` に `AUTH_REQUIRED=1`、`X_CLIENT_ID`、`X_REDIRECT_URI`、`SESSION_SECRET` を設定してから再構築してください。
 
 ## プロジェクト構成
 
@@ -342,7 +344,7 @@ WeightedSelectionTool/
 ├─ docker-compose.yml
 ├─ .dockerignore
 ├─ README.md
-├─ 用户手册.md
+├─ ユーザーマニュアル.md
 └─ vrc_raffle.db        # 実行時に作成されるローカル DB
 ```
 

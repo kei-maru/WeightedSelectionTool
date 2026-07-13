@@ -4,19 +4,44 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google form抽選ツール Local Web</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260713-7">
+  <link rel="stylesheet" href="/static/styles.css?v=20260713-12">
 </head>
 <body>
   <header>
     <h1>Google form抽選ツール <span class="hint">Local Web</span></h1>
     <div class="headerActions">
-      <div id="authUser" class="authUser" hidden></div>
-      <a id="logoutLink" class="headerLink" href="/auth/logout" hidden>ログアウト</a>
+      <div id="authUser" class="authUser" hidden>
+        <img id="authAvatar" class="authAvatar" alt="" referrerpolicy="no-referrer" hidden>
+        <span id="authAvatarFallback" class="authAvatar authAvatarFallback" hidden></span>
+        <span id="authName"></span>
+      </div>
+      <a id="accountAction" class="headerLink" href="/auth/logout" hidden>ログアウト</a>
       <button class="danger exitAction" type="button">終了</button>
     </div>
   </header>
   <main class="shell">
     <aside class="card">
+      <div id="accountMode" class="accountMode guestMode">
+        <span class="accountModeIcon" aria-hidden="true">
+          <svg class="modeIcon guestIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 3h5v5"></path>
+            <path d="M4 20 21 3"></path>
+            <path d="M21 16v5h-5"></path>
+            <path d="m15 15 6 6"></path>
+            <path d="m4 4 5 5"></path>
+          </svg>
+          <svg class="modeIcon savedIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="8" ry="3"></ellipse>
+            <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path>
+            <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"></path>
+          </svg>
+        </span>
+        <div class="accountModeContent">
+          <strong id="accountModeTitle">単発抽選モードのみ（未登録）</strong>
+          <span id="accountModeDescription">均等確率で抽選します。<br>Xでログインすると、確率加算＆抽選結果を保存できます。</span>
+        </div>
+        <a id="accountModeLogin" class="accountModeLogin" href="/auth/login">Xでログイン</a>
+      </div>
       <form id="uploadForm">
         <label>CSV / Excel ファイル</label>
         <input id="csvFile" name="file" type="file" accept=".csv,.xls,.xlsx" hidden>
@@ -137,6 +162,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260713-7" defer></script>
+  <script src="/static/app.js?v=20260713-12" defer></script>
 </body>
 </html>

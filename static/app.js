@@ -28,16 +28,42 @@ const state = {
         const response = await fetch("/api/auth/me", { cache: "no-store" });
         const data = await response.json();
         if (data.guest) {
-          $("authUser").textContent = "ゲスト抽選";
+          $("authAvatarFallback").textContent = "1";
+          $("authAvatarFallback").hidden = false;
+          $("authName").textContent = "単発抽選";
           $("authUser").hidden = false;
-          $("logoutLink").hidden = false;
+          $("accountAction").textContent = "Xでログイン";
+          $("accountAction").href = "/auth/login";
+          $("accountAction").classList.add("loginAction");
+          $("accountAction").hidden = false;
+          $("accountMode").className = "accountMode guestMode";
+          $("accountModeTitle").textContent = "単発抽選モード（未登録）";
+          $("accountModeDescription").innerHTML = "均等確率で抽選します。<br>Xでログインすると、確率加算＆抽選結果を保存できます。";
           return;
         }
-        if (!data.authenticated || !data.user) return;
+        if (!data.authenticated || !data.user) {
+          $("accountMode").className = "accountMode savedMode";
+          $("accountModeTitle").textContent = "ローカル保存モード";
+          $("accountModeDescription").textContent = "この端末のデータベースに履歴を保存します";
+          return;
+        }
         const label = data.user.name || `@${data.user.username}`;
-        $("authUser").textContent = `${label} (@${data.user.username})`;
+        if (data.user.profileImageUrl) {
+          $("authAvatar").src = data.user.profileImageUrl;
+          $("authAvatar").hidden = false;
+        } else {
+          $("authAvatarFallback").textContent = label.slice(0, 1).toUpperCase();
+          $("authAvatarFallback").hidden = false;
+        }
+        $("authName").textContent = `${label} (@${data.user.username})`;
         $("authUser").hidden = false;
-        $("logoutLink").hidden = false;
+        $("accountAction").textContent = "ログアウト";
+        $("accountAction").href = "/auth/logout";
+        $("accountAction").classList.remove("loginAction");
+        $("accountAction").hidden = false;
+        $("accountMode").className = "accountMode savedMode";
+        $("accountModeTitle").textContent = "履歴保存モード";
+        $("accountModeDescription").textContent = "抽選履歴をこのXアカウントに保存します";
       } catch (_error) {
         // The raffle UI remains usable when authentication is disabled locally.
       }

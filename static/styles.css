@@ -15,6 +15,7 @@
       --shadow: 0 12px 32px rgba(30, 64, 175, .09);
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -37,11 +38,82 @@
       box-shadow: 0 1px 12px rgba(30, 64, 175, .05);
     }
     .headerActions { display: flex; align-items: center; gap: 10px; }
-    .authUser { color: var(--muted); font-size: 13px; }
+    .authUser {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .authAvatar {
+      width: 32px;
+      height: 32px;
+      flex: 0 0 32px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .authAvatarFallback {
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+    }
     .headerLink {
       color: var(--text); text-decoration: none; border: 1px solid var(--line);
       border-radius: 6px; padding: 8px 11px; background: #fff; font-size: 13px;
     }
+    .headerLink.loginAction {
+      color: #fff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+    .accountMode {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 11px;
+      margin-bottom: 16px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f7f9fd;
+    }
+    .accountModeIcon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      border-radius: 7px;
+      color: #fff;
+      background: var(--blue);
+    }
+    .modeIcon { width: 18px; height: 18px; }
+    .savedIcon { display: none; }
+    .accountMode strong,
+    .accountMode span { display: block; }
+    .accountModeContent { flex: 1 1 240px; min-width: 0; }
+    .accountMode strong { font-size: 13px; }
+    .accountMode div > span { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .accountMode.savedMode { border-color: #b9e5cf; background: #f0fbf5; }
+    .accountMode.savedMode .accountModeIcon { background: var(--green); }
+    .accountMode.savedMode .guestIcon { display: none; }
+    .accountMode.savedMode .savedIcon { display: block; }
+    .accountModeLogin {
+      flex: 1 0 100%;
+      margin-top: 2px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      color: #fff;
+      background: #101114;
+      text-align: center;
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .accountModeLogin:hover { background: #27282c; }
+    .accountMode.savedMode .accountModeLogin { display: none; }
     h1 { margin: 0; font-size: 22px; letter-spacing: .01em; }
     .shell {
       display: grid;
@@ -145,7 +217,7 @@
       line-height: 1.45;
     }
     .guide {
-      margin: 0 18px 12px;
+      margin: 14px 18px 12px;
       padding: 14px 16px;
       border: 1px solid var(--line);
       border-radius: 12px;

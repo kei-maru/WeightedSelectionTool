@@ -92,7 +92,8 @@ class XAuthService:
         user = request.session.get("auth_user")
         guest_id = request.session.get("guest_id")
         if self.settings.required and not user and not guest_id:
-            raise HTTPException(status_code=401, detail="Xでログインしてください。")
+            guest_id = secrets.token_urlsafe(18)
+            request.session["guest_id"] = guest_id
         if user:
             set_request_identity(f"x:{user['id']}", guest=False)
         elif guest_id:
@@ -215,7 +216,7 @@ class XAuthService:
 
     def logout(self, request: Request):
         request.session.clear()
-        return RedirectResponse("/login" if self.settings.required else "/", status_code=303)
+        return RedirectResponse("/", status_code=303)
 
     def start_guest(self, request: Request):
         request.session.clear()
@@ -228,6 +229,7 @@ class XAuthService:
         return {
             "ok": True,
             "required": self.settings.required,
+            "loginAvailable": self.settings.required,
             "authenticated": bool(user),
             "guest": guest,
             "user": user,

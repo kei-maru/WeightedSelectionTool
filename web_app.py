@@ -1,4 +1,5 @@
 import os
+import secrets
 import socket
 import threading
 import time
@@ -76,7 +77,7 @@ async def index(request: Request):
     if auth_settings.required and not (
         request.session.get("auth_user") or request.session.get("guest_id")
     ):
-        return RedirectResponse("/login")
+        request.session["guest_id"] = secrets.token_urlsafe(18)
     return FileResponse(os.path.join(TEMPLATE_DIR, "index.html"))
 
 
