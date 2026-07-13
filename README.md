@@ -168,6 +168,7 @@ Event は抽選を活動や企画ごとに分けるための分類です。
 
 以前の抽選結果一覧では、Session の表示と削除ができます。Session 名変更機能はありません。
 Session を削除すると、その Session の参加回数と当選回数も Event のユーザー一覧から戻され、重みと確率が再計算されます。
+画面の Session 番号は X アカウントごとに `#1` から始まります。削除で空いた番号は、次の抽選で再利用されます。
 
 ## ユーザー一覧
 
@@ -344,6 +345,7 @@ WeightedSelectionTool/
 ├─ docker-compose.yml
 ├─ .dockerignore
 ├─ README.md
+├─ 部署文档_OracleCloud_Nginx.md
 ├─ ユーザーマニュアル.md
 └─ vrc_raffle.db        # 実行時に作成されるローカル DB
 ```

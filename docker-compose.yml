@@ -4,7 +4,7 @@ services:
     container_name: google-form-raffle
     restart: unless-stopped
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
     volumes:
       - ./data:/app/data
     environment:

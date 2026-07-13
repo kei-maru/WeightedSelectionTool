@@ -9,6 +9,7 @@ import api
 import core
 from openpyxl import load_workbook
 from services.request_context import set_request_identity
+from services import application
 
 
 class HistorySyncTest(unittest.TestCase):
@@ -263,6 +264,27 @@ class HistorySyncTest(unittest.TestCase):
 
         set_request_identity("x:account-b", guest=False)
         self.assertEqual(api.public_state()["events"], [])
+
+    def test_session_numbers_are_per_account_and_reuse_deleted_gaps(self):
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
+            first = application.next_session_number(conn, "x:a")
+            conn.execute("""
+                INSERT INTO raffle_sessions (owner_id, session_number, created_at)
+                VALUES ('x:a', ?, '2026-07-13')
+            """, (first,))
+            second = application.next_session_number(conn, "x:a")
+            conn.execute("""
+                INSERT INTO raffle_sessions (owner_id, session_number, created_at)
+                VALUES ('x:a', ?, '2026-07-13')
+            """, (second,))
+            other_account = application.next_session_number(conn, "x:b")
+            conn.execute("""
+                DELETE FROM raffle_sessions
+                WHERE owner_id='x:a' AND session_number=1
+            """)
+            reused = application.next_session_number(conn, "x:a")
+
+        self.assertEqual((first, second, other_account, reused), (1, 2, 1, 1))
 
     def test_guest_raffle_does_not_create_a_session(self):
         set_request_identity("guest:test", guest=True)

@@ -120,7 +120,7 @@
       grid-template-columns: 390px minmax(0, 1fr);
       gap: 18px;
       padding: 18px;
-      height: calc(100vh - 66px);
+      height: calc(100vh - 102px);
     }
     .card {
       background: rgba(255,255,255,.86);
@@ -128,6 +128,23 @@
       border-radius: 8px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(18px);
+    }
+    .siteFooter {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 36px;
+      color: var(--muted);
+      gap: 12px;
+      font-size: 14px;
+      opacity: .48;
+    }
+    .siteFooter::before,
+    .siteFooter::after {
+      width: 52px;
+      height: 1px;
+      content: "";
+      background: currentColor;
     }
     aside {
       padding: 18px;

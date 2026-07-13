@@ -178,9 +178,44 @@ def init_db():
             c.execute(
                 f"ALTER TABLE {table} ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'local'"
             )
+    session_columns = [
+        row[1] for row in c.execute("PRAGMA table_info(raffle_sessions)").fetchall()
+    ]
+    if "session_number" not in session_columns:
+        c.execute("ALTER TABLE raffle_sessions ADD COLUMN session_number INTEGER")
+    owners = [
+        row[0] for row in c.execute(
+            "SELECT DISTINCT owner_id FROM raffle_sessions"
+        ).fetchall()
+    ]
+    for owner_id in owners:
+        used = {
+            row[0] for row in c.execute("""
+                SELECT session_number FROM raffle_sessions
+                WHERE owner_id=? AND session_number IS NOT NULL
+            """, (owner_id,)).fetchall()
+        }
+        next_number = 1
+        rows = c.execute("""
+            SELECT id FROM raffle_sessions
+            WHERE owner_id=? AND session_number IS NULL
+            ORDER BY id
+        """, (owner_id,)).fetchall()
+        for row in rows:
+            while next_number in used:
+                next_number += 1
+            c.execute(
+                "UPDATE raffle_sessions SET session_number=? WHERE id=?",
+                (next_number, row[0]),
+            )
+            used.add(next_number)
     c.execute("CREATE INDEX IF NOT EXISTS idx_events_owner ON events(owner_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_participants_owner ON participants(owner_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON raffle_sessions(owner_id)")
+    c.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_owner_number
+        ON raffle_sessions(owner_id, session_number)
+    """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_sync_batches_owner ON history_sync_batches(owner_id)")
     conn.commit()
     conn.close()

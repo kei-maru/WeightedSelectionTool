@@ -1,11 +1,11 @@
 const state = {
       columns: [], rows: [], users: [], results: [],
-      idColumn: null, displayColumns: [], latestSessionId: null,
+      idColumn: null, displayColumns: [], latestSessionId: null, latestSessionNumber: null,
       events: [], eventId: null, userEventId: null,
       defaultEventName: "default", defaultEventEnabled: true,
-      savedUsers: [], savedResults: [], sessions: [], savedLatestSessionId: null,
+      savedUsers: [], savedResults: [], sessions: [], savedLatestSessionId: null, savedLatestSessionNumber: null,
       resultDisplayColumns: [], savedUserDisplayColumns: [],
-      selectedSessionId: null, selectedResults: [], selectedResultDisplayColumns: [],
+      selectedSessionId: null, selectedSessionNumber: null, selectedResults: [], selectedResultDisplayColumns: [],
       mode: "linear", modeLabel: "ゆるやか加重",
       specialRules: [], columnValues: {},
       excludedIndices: [],
@@ -135,6 +135,7 @@ const state = {
         idColumn: data.idColumn || null,
         displayColumns: data.displayColumns || [],
         latestSessionId: data.latestSessionId || null,
+        latestSessionNumber: data.latestSessionNumber || null,
         events: data.events || [],
         defaultEventName: data.defaultEventName || "default",
         defaultEventEnabled: data.defaultEventEnabled !== false,
@@ -144,9 +145,11 @@ const state = {
         savedResults: data.savedResults || [],
         sessions: data.sessions || [],
         savedLatestSessionId: data.savedLatestSessionId || null,
+        savedLatestSessionNumber: data.savedLatestSessionNumber || null,
         resultDisplayColumns: data.resultDisplayColumns || [],
         savedUserDisplayColumns: data.savedUserDisplayColumns || [],
         selectedSessionId: data.latestSessionId || data.savedLatestSessionId || state.selectedSessionId,
+        selectedSessionNumber: data.latestSessionNumber || data.savedLatestSessionNumber || state.selectedSessionNumber,
         selectedResults: [],
         selectedResultDisplayColumns: [],
         mode: data.mode || state.mode || "linear",
@@ -185,8 +188,8 @@ const state = {
       } else if (activeTab === "results") {
         $("guide").style.display = "";
         $("panelTitle").textContent = "抽選結果一覧";
-        const sessionId = state.latestSessionId || state.savedLatestSessionId;
-        const session = sessionId ? `Session #${sessionId}` : "記録なし";
+        const sessionNumber = state.latestSessionNumber || state.selectedSessionNumber || state.savedLatestSessionNumber;
+        const session = sessionNumber ? `Session #${sessionNumber}` : "記録なし";
         $("guide").innerHTML = `<strong>最新の抽選結果</strong>
           <div>${escapeHtml(session)} の当選者を表示します。CSVを読み込んでいなくても保存済み記録を確認できます。</div>`;
       } else {
@@ -220,6 +223,11 @@ const state = {
     }
     function renderResults() {
       const currentSessionId = state.latestSessionId || state.selectedSessionId || state.savedLatestSessionId;
+      const currentSessionNumber = state.latestSessionId
+        ? state.latestSessionNumber
+        : state.selectedSessionId
+          ? state.selectedSessionNumber
+          : state.savedLatestSessionNumber;
       const resultRows = state.results.length
         ? state.results
         : state.selectedResults.length
@@ -230,7 +238,7 @@ const state = {
         : state.selectedResults.length
           ? state.selectedResultDisplayColumns
           : state.resultDisplayColumns;
-      const resultTitle = currentSessionId ? `抽選結果: Session #${currentSessionId}` : "抽選結果";
+      const resultTitle = currentSessionNumber ? `抽選結果: Session #${currentSessionNumber}` : "抽選結果";
       const calcText = state.results.length
         ? state.calculationSummary
         : state.selectedCalculationSummary || state.calculationSummary;
@@ -247,15 +255,15 @@ const state = {
         .map(c => `<th>${escapeHtml(c)}</th>`);
       const sessionBody = state.sessions.length
         ? state.sessions.map(session => `<tr class="${session.id === currentSessionId ? "activeSession" : ""}">
-            <td>#${escapeHtml(session.id)}</td>
+            <td>#${escapeHtml(session.number || session.id)}</td>
             <td>${escapeHtml(session.event_name || "default")}</td>
             <td>${escapeHtml(session.csv_file)}</td>
             <td>${escapeHtml(session.mode)}</td>
             <td>${escapeHtml(session.draw_count)}</td>
             <td>${escapeHtml(shortDate(session.created_at))}</td>
             <td>
-              <button class="tinyButton sessionOpen" type="button" data-session="${escapeHtml(session.id)}">表示</button>
-              <button class="tinyButton sessionDelete" type="button" data-session="${escapeHtml(session.id)}">削除</button>
+              <button class="tinyButton sessionOpen" type="button" data-session="${escapeHtml(session.id)}" data-number="${escapeHtml(session.number || session.id)}">表示</button>
+              <button class="tinyButton sessionDelete" type="button" data-session="${escapeHtml(session.id)}" data-number="${escapeHtml(session.number || session.id)}">削除</button>
             </td>
           </tr>`).join("")
         : `<tr><td colspan="7">保存済みセッションがありません。</td></tr>`;
@@ -462,7 +470,7 @@ const state = {
         button.addEventListener("click", () => loadSession(button.dataset.session));
       });
       document.querySelectorAll(".sessionDelete").forEach(button => {
-        button.addEventListener("click", () => deleteSession(button.dataset.session));
+        button.addEventListener("click", () => deleteSession(button.dataset.session, button.dataset.number));
       });
     }
     function bindEventEditorEvents() {
@@ -649,11 +657,13 @@ const state = {
       try {
         const data = await postJson("/api/session", { sessionId });
         state.selectedSessionId = data.sessionId;
+        state.selectedSessionNumber = data.sessionNumber;
         state.selectedResults = data.results || [];
         state.selectedResultDisplayColumns = data.displayColumns || [];
         state.selectedCalculationSummary = data.calculationSummary || "";
         state.results = [];
         state.latestSessionId = null;
+        state.latestSessionNumber = null;
         activeTab = "results";
         render();
         setStatus(data.message);
@@ -662,8 +672,8 @@ const state = {
         setStatus(err.message);
       }
     }
-    async function deleteSession(sessionId) {
-      if (!confirm(`Session #${sessionId} を削除しますか？`)) return;
+    async function deleteSession(sessionId, sessionNumber) {
+      if (!confirm(`Session #${sessionNumber} を削除しますか？`)) return;
       try {
         const data = await postJson("/api/session/delete", { sessionId });
         mergeState(data, "results");

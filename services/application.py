@@ -29,6 +29,7 @@ DEFAULT_STATE = {
     "excluded_indices": set(),
     "last_winner_indices": set(),
     "latest_session_id": None,
+    "latest_session_number": None,
     "csv_file": "",
     "event_id": None,
     "user_event_id": "__default__",
@@ -389,6 +390,20 @@ def event_db_id(event_id):
     return 0 if event_id in ("", None, "__default__") else safe_int(event_id, 0)
 
 
+def next_session_number(conn, owner_id):
+    used = {
+        safe_int(row[0])
+        for row in conn.execute("""
+            SELECT session_number FROM raffle_sessions
+            WHERE owner_id=? AND session_number IS NOT NULL
+        """, (owner_id,)).fetchall()
+    }
+    number = 1
+    while number in used:
+        number += 1
+    return number
+
+
 def get_setting(conn, key, fallback=""):
     key = f"{current_account_id()}:{key}" if current_account_id() != "local" else key
     row = conn.execute(
@@ -428,6 +443,7 @@ def db_snapshot():
     if is_guest_mode():
         return {
             "sessions": [], "events": [], "latestSessionId": None,
+            "latestSessionNumber": None,
             "latestResults": [], "resultDisplayColumns": [], "savedUsers": [],
             "savedUserDisplayColumns": [], "userEventId": None,
             "historySyncBatches": [], "defaultEventName": "default",
@@ -453,7 +469,7 @@ def db_snapshot():
     user_event_id = STATE.get("user_event_id")
 
     sessions = [dict(row) for row in conn.execute("""
-        SELECT s.id, s.event_id,
+        SELECT s.id, COALESCE(s.session_number, s.id) AS number, s.event_id,
                CASE WHEN s.event_id IS NULL THEN ? ELSE COALESCE(e.name, ?) END AS event_name,
                s.session_name, s.csv_file, s.mode, s.draw_count, s.created_at, s.notes
         FROM raffle_sessions s
@@ -464,6 +480,7 @@ def db_snapshot():
     """, (default_event_name, default_event_name, owner_id)).fetchall()]
 
     latest_session_id = sessions[0]["id"] if sessions else None
+    latest_session_number = sessions[0]["number"] if sessions else None
     latest_payload = db_session_results(conn, latest_session_id) if latest_session_id else {
         "results": [],
         "displayColumns": [],
@@ -528,6 +545,7 @@ def db_snapshot():
         "sessions": sessions,
         "events": events,
         "latestSessionId": latest_session_id,
+        "latestSessionNumber": latest_session_number,
         "latestResults": latest_payload["results"],
         "resultDisplayColumns": latest_payload["displayColumns"],
         "savedUsers": users,
@@ -602,7 +620,8 @@ def build_event_export(event_id):
         })
 
     result_rows = conn.execute(f"""
-        SELECT s.id AS session_id, s.created_at, s.mode, s.draw_count, s.csv_file,
+        SELECT COALESCE(s.session_number, s.id) AS session_number,
+               s.created_at, s.mode, s.draw_count, s.csv_file,
                CASE WHEN s.event_id IS NULL THEN ? ELSE COALESCE(e.name, ?) END AS event_name,
                COALESCE(r.display_name, r.vrc_id, r.x_id, 'unknown') AS draw_id,
                r.extra_display_json
@@ -615,7 +634,7 @@ def build_event_export(event_id):
     sheet2 = []
     for row in result_rows:
         sheet2.append({
-            "Session": row["session_id"],
+            "Session": row["session_number"],
             "日時": str(row["created_at"] or "").replace("T", " ")[:16],
             "Event": row["event_name"],
             "抽選ID": row["draw_id"],
@@ -750,6 +769,7 @@ def public_state(message=""):
         "users": deduped_user_rows,
         "results": result_rows,
         "latestSessionId": STATE["latest_session_id"],
+        "latestSessionNumber": STATE.get("latest_session_number"),
         "mode": STATE.get("mode", "linear"),
         "modeLabel": mode_label(STATE.get("mode", "linear")),
         "calculationSummary": calculation_summary(),
@@ -762,6 +782,7 @@ def public_state(message=""):
         "eventId": STATE.get("event_id"),
         "userEventId": snapshot["userEventId"],
         "savedLatestSessionId": snapshot["latestSessionId"],
+        "savedLatestSessionNumber": snapshot["latestSessionNumber"],
         "resultDisplayColumns": snapshot["resultDisplayColumns"],
         "savedUserDisplayColumns": snapshot["savedUserDisplayColumns"],
         "historyImport": public_history_import(),
@@ -837,6 +858,7 @@ def run_raffle(payload):
     if is_guest_mode():
         STATE["last_winner_indices"] = set(winners_idx)
         STATE["latest_session_id"] = None
+        STATE["latest_session_number"] = None
         recalculate_probabilities()
         return public_state(f"ゲスト抽選完了: {total}人中 {len(winners_idx)}名当選（保存なし）")
 
@@ -848,12 +870,13 @@ def run_raffle(payload):
     ).fetchone():
         conn.close()
         raise ValueError("指定されたEventが見つかりません。")
+    session_number = next_session_number(conn, owner_id)
     cur = conn.execute(
         "INSERT INTO raffle_sessions "
-        "(event_id,session_name,csv_file,mode,draw_count,created_at,notes,owner_id)"
-        " VALUES (?,?,?,?,?,?,?,?)",
+        "(event_id,session_name,csv_file,mode,draw_count,created_at,notes,owner_id,session_number)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
         (event_id, session_name, STATE["csv_file"], mode, draw_count, now, saved_notes,
-         owner_id))
+         owner_id, session_number))
     session_id = cur.lastrowid
 
     participant_ids = {}
@@ -911,8 +934,11 @@ def run_raffle(payload):
     conn.close()
     STATE["last_winner_indices"] = set(winners_idx)
     STATE["latest_session_id"] = session_id
+    STATE["latest_session_number"] = session_number
     recalculate_probabilities()
-    return public_state(f"抽選完了: Session #{session_id} | {total}人中 {len(winners_idx)}名当選")
+    return public_state(
+        f"抽選完了: Session #{session_number} | {total}人中 {len(winners_idx)}名当選"
+    )
 
 
 def read_uploaded_dataframe(filename, content):
@@ -941,6 +967,7 @@ def handle_upload(filename, content):
     STATE["excluded_indices"] = set()
     STATE["last_winner_indices"] = set()
     STATE["latest_session_id"] = None
+    STATE["latest_session_number"] = None
     STATE["csv_file"] = filename
     STATE["mode"] = "equal" if is_guest_mode() else "linear"
     apply_column_roles()
@@ -1260,7 +1287,8 @@ def handle_session(payload):
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
     session = conn.execute("""
-        SELECT id, session_name, csv_file, mode, draw_count, created_at, notes
+        SELECT id, COALESCE(session_number, id) AS number,
+               session_name, csv_file, mode, draw_count, created_at, notes
         FROM raffle_sessions
         WHERE id=? AND owner_id=?
     """, (session_id, current_account_id())).fetchone()
@@ -1272,9 +1300,10 @@ def handle_session(payload):
     payload.update({
         "ok": True,
         "session": dict(session),
+        "sessionNumber": session["number"],
         "calculationSummary": (session["notes"] or "").split("[計算]", 1)[1].strip()
         if session["notes"] and "[計算]" in session["notes"] else "",
-        "message": f"Session #{session_id} の結果を表示しています。",
+        "message": f"Session #{session['number']} の結果を表示しています。",
     })
     return payload
 
@@ -1288,12 +1317,14 @@ def handle_session_delete(payload):
     owner_id = current_account_id()
     try:
         session = conn.execute(
-            "SELECT id, event_id FROM raffle_sessions WHERE id=? AND owner_id=?",
+            "SELECT id, event_id, COALESCE(session_number, id) AS number "
+            "FROM raffle_sessions WHERE id=? AND owner_id=?",
             (session_id, owner_id),
         ).fetchone()
         if not session:
             raise ValueError("指定されたセッションが見つかりません。")
         event_id = session["event_id"]
+        session_number = session["number"]
         target_event_id = event_db_id(event_id)
         joins = {
             row["participant_id"]: row["count"]
@@ -1380,10 +1411,11 @@ def handle_session_delete(payload):
         conn.close()
     if STATE.get("latest_session_id") == session_id:
         STATE["latest_session_id"] = None
+        STATE["latest_session_number"] = None
         STATE["last_winner_indices"] = set()
     apply_column_roles()
     recalculate_probabilities()
-    return public_state(f"Session #{session_id} を削除しました。")
+    return public_state(f"Session #{session_number} を削除しました。")
 
 
 def handle_event_select(payload):
