@@ -6,12 +6,14 @@ import webbrowser
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from core import init_db
 from fastapi_routes import router
+from services.auth_service import auth_router, auth_service, settings as auth_settings
 
 
 HOST = os.environ.get("APP_HOST", "127.0.0.1")
@@ -20,6 +22,7 @@ OPEN_BROWSER = os.environ.get("OPEN_BROWSER", "1") == "1"
 ALLOW_SHUTDOWN = os.environ.get("ALLOW_SHUTDOWN", "1") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 
 
 @asynccontextmanager
@@ -32,7 +35,18 @@ app = FastAPI(
     title="Google form抽選ツール",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url=None if auth_settings.required else "/docs",
+    redoc_url=None,
+    openapi_url=None if auth_settings.required else "/openapi.json",
 )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=auth_settings.session_secret,
+    same_site="lax",
+    https_only=auth_settings.cookie_secure,
+    max_age=60 * 60 * 12,
+)
+app.include_router(auth_router)
 app.include_router(router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -53,13 +67,24 @@ async def value_error_handler(_request: Request, exc: ValueError):
 
 
 @app.get("/", include_in_schema=False)
-async def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+async def index(request: Request):
+    if auth_settings.required and not request.session.get("auth_user"):
+        return RedirectResponse("/login")
+    return FileResponse(os.path.join(TEMPLATE_DIR, "index.html"))
 
 
 @app.get("/index.html", include_in_schema=False)
-async def index_html():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+async def index_html(request: Request):
+    return await index(request)
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page(request: Request):
+    if not auth_settings.required:
+        return RedirectResponse("/")
+    if request.session.get("auth_user"):
+        return RedirectResponse("/")
+    return FileResponse(os.path.join(TEMPLATE_DIR, "login.html"))
 
 
 def request_server_stop():
@@ -68,7 +93,11 @@ def request_server_stop():
         server.should_exit = True
 
 
-@app.post("/api/shutdown", include_in_schema=False)
+@app.post(
+    "/api/shutdown",
+    include_in_schema=False,
+    dependencies=[Depends(auth_service.require_user)],
+)
 async def shutdown(background_tasks: BackgroundTasks):
     if not ALLOW_SHUTDOWN:
         return JSONResponse(

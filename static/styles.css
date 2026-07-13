@@ -36,6 +36,12 @@
       backdrop-filter: blur(16px);
       box-shadow: 0 1px 12px rgba(30, 64, 175, .05);
     }
+    .headerActions { display: flex; align-items: center; gap: 10px; }
+    .authUser { color: var(--muted); font-size: 13px; }
+    .headerLink {
+      color: var(--text); text-decoration: none; border: 1px solid var(--line);
+      border-radius: 6px; padding: 8px 11px; background: #fff; font-size: 13px;
+    }
     h1 { margin: 0; font-size: 22px; letter-spacing: .01em; }
     .shell {
       display: grid;

@@ -1,17 +1,18 @@
 import io
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, UploadFile
+from fastapi import APIRouter, Body, Depends, UploadFile
 from fastapi.responses import StreamingResponse
 
-from api import build_event_export, handle_action, handle_history_upload, handle_upload
+from services.api_services import api_service
+from services.auth_service import auth_service
 
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(auth_service.require_user)])
 
 
 async def action(path, payload=None):
-    return handle_action(path, payload or {})
+    return api_service.dispatch(path, payload or {})
 
 
 @router.post("/state")
@@ -21,12 +22,12 @@ async def state():
 
 @router.post("/upload")
 async def upload(file: UploadFile):
-    return handle_upload(file.filename, await file.read())
+    return api_service.raffle.upload(file.filename, await file.read())
 
 
 @router.post("/history/upload")
 async def history_upload(file: UploadFile):
-    return handle_history_upload(file.filename, await file.read())
+    return api_service.history.upload(file.filename, await file.read())
 
 
 @router.post("/roles")
@@ -97,7 +98,7 @@ async def exclude(payload: dict = Body(...)):
 
 @router.get("/export")
 async def export(eventId: str = "__all__"):
-    content, filename = build_event_export(eventId)
+    content, filename = api_service.exports.build_event_workbook(eventId)
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

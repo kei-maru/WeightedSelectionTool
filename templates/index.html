@@ -4,12 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google form抽選ツール Local Web</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260713-6">
+  <link rel="stylesheet" href="/static/styles.css?v=20260713-7">
 </head>
 <body>
   <header>
     <h1>Google form抽選ツール <span class="hint">Local Web</span></h1>
-    <button class="danger exitAction" type="button">終了</button>
+    <div class="headerActions">
+      <div id="authUser" class="authUser" hidden></div>
+      <a id="logoutLink" class="headerLink" href="/auth/logout" hidden>ログアウト</a>
+      <button class="danger exitAction" type="button">終了</button>
+    </div>
   </header>
   <main class="shell">
     <aside class="card">
@@ -131,6 +135,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260713-6" defer></script>
+  <script src="/static/app.js?v=20260713-7" defer></script>
 </body>
 </html>

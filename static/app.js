@@ -23,6 +23,19 @@ const state = {
     let isShuttingDown = false;
     const $ = (id) => document.getElementById(id);
     function setStatus(text) { $("status").textContent = text || "待機中"; }
+    async function loadAuthUser() {
+      try {
+        const response = await fetch("/api/auth/me", { cache: "no-store" });
+        const data = await response.json();
+        if (!data.authenticated || !data.user) return;
+        const label = data.user.name || `@${data.user.username}`;
+        $("authUser").textContent = `${label} (@${data.user.username})`;
+        $("authUser").hidden = false;
+        $("logoutLink").hidden = false;
+      } catch (_error) {
+        // The raffle UI remains usable when authentication is disabled locally.
+      }
+    }
     function setValue(id, value) {
       const el = $(id);
       if (el) el.value = value;
@@ -801,4 +814,5 @@ const state = {
         render();
       }
     }
+    loadAuthUser();
     loadInitialState();

@@ -1,6 +1,7 @@
 .venv
 vrc_raffle.db
 .idea
+.env
 __pycache__/
 *.pyc
 _build_config.py

@@ -14,7 +14,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py web_app.py fastapi_routes.py api.py core.py ./
+COPY services ./services
 COPY static ./static
+COPY templates ./templates
 
 RUN mkdir -p /app/data
 

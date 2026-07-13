@@ -27,6 +27,17 @@ def init_db():
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS auth_users (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            x_user_id         TEXT NOT NULL UNIQUE,
+            username          TEXT NOT NULL,
+            display_name      TEXT,
+            profile_image_url TEXT,
+            first_login_at    TEXT NOT NULL,
+            last_login_at     TEXT NOT NULL
+        )
+    """)
+    c.execute("""
         INSERT OR IGNORE INTO app_settings (key, value)
         VALUES ('default_event_name', 'default')
     """)
