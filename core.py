@@ -21,6 +21,20 @@ def init_db():
     conn = sqlite3.connect(db_path())
     c = conn.cursor()
     c.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    c.execute("""
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('default_event_name', 'default')
+    """)
+    c.execute("""
+        INSERT OR IGNORE INTO app_settings (key, value)
+        VALUES ('default_event_enabled', '1')
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS events (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,

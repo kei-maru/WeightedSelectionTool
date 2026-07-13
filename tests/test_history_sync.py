@@ -1,10 +1,13 @@
+import io
 import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 
 import api
 import core
+from openpyxl import load_workbook
 
 
 class HistorySyncTest(unittest.TestCase):
@@ -35,7 +38,7 @@ class HistorySyncTest(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _seed(self, draw_id, join_count, win_count):
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             participant_id = conn.execute(
                 "INSERT INTO participants (display_name) VALUES (?)", (draw_id,)
             ).lastrowid
@@ -47,7 +50,7 @@ class HistorySyncTest(unittest.TestCase):
         return participant_id
 
     def _rows(self):
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             return {
                 row[0]: (row[1], row[2])
                 for row in conn.execute("""
@@ -59,7 +62,7 @@ class HistorySyncTest(unittest.TestCase):
             }
 
     def _add_submission(self, participant_id):
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             session_id = conn.execute("""
                 INSERT INTO raffle_sessions (event_id, created_at)
                 VALUES (NULL, '2026-07-13T00:00:00')
@@ -85,7 +88,7 @@ class HistorySyncTest(unittest.TestCase):
         if mode:
             payload["syncMode"] = mode
         api.handle_history_apply(payload)
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             return conn.execute(
                 "SELECT max(id) FROM history_sync_batches"
             ).fetchone()[0]
@@ -106,7 +109,7 @@ class HistorySyncTest(unittest.TestCase):
             {"ID": "B", "参加": 7, "当選": 2},
         ], "overwrite")
         self.assertEqual(self._rows(), {"B": (7, 2)})
-        with sqlite3.connect(self.db_file) as conn:
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
             snapshot_complete = conn.execute(
                 "SELECT snapshot_complete FROM history_sync_batches WHERE id=?",
                 (batch_id,),
@@ -162,6 +165,63 @@ class HistorySyncTest(unittest.TestCase):
         api.run_raffle({"drawCount": 1, "mode": "equal", "eventId": ""})
 
         self.assertEqual(self._rows()["A"], (3, 2))
+
+    def test_default_event_can_be_renamed_and_requires_another_event_to_delete(self):
+        renamed = api.handle_event_save({
+            "eventId": "__default__",
+            "name": "メインイベント",
+            "description": "",
+        })
+        self.assertEqual(renamed["defaultEventName"], "メインイベント")
+
+        with self.assertRaisesRegex(ValueError, "他のEvent"):
+            api.handle_event_delete({"eventId": "__default__"})
+
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
+            target_id = conn.execute("""
+                INSERT INTO events (name, created_at) VALUES ('Event 2', '2026-07-13')
+            """).lastrowid
+        self._add_submission(self.a_id)
+        deleted = api.handle_event_delete({
+            "eventId": "__default__",
+            "targetEventId": target_id,
+        })
+
+        self.assertFalse(deleted["defaultEventEnabled"])
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM event_participant_history WHERE event_id=0"
+            ).fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM event_participant_history WHERE event_id=?",
+                (target_id,),
+            ).fetchone()[0], 2)
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM raffle_sessions WHERE event_id=?",
+                (target_id,),
+            ).fetchone()[0], 1)
+
+    def test_excel_export_contains_user_probability_and_raffle_sheets(self):
+        with closing(sqlite3.connect(self.db_file)) as conn, conn:
+            session_id = conn.execute("""
+                INSERT INTO raffle_sessions
+                (event_id, csv_file, mode, draw_count, created_at)
+                VALUES (NULL, 'sample.csv', 'linear', 1, '2026-07-13T10:30:00')
+            """).lastrowid
+            conn.execute("""
+                INSERT INTO raffle_results
+                (session_id, participant_id, display_name, is_winner)
+                VALUES (?, ?, 'A', 1)
+            """, (session_id, self.a_id))
+
+        content, filename = api.build_event_export("__default__")
+        workbook = load_workbook(io.BytesIO(content), data_only=True)
+
+        self.assertEqual(workbook.sheetnames, ["Sheet1", "Sheet2"])
+        self.assertTrue(filename.endswith(".xlsx"))
+        self.assertEqual(workbook["Sheet1"]["A2"].value, "A")
+        self.assertIsInstance(workbook["Sheet1"]["E2"].value, float)
+        self.assertEqual(workbook["Sheet2"]["D2"].value, "A")
 
 
 if __name__ == "__main__":

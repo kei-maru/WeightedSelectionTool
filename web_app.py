@@ -5,9 +5,9 @@ import time
 import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
-from api import handle_api
+from api import build_event_export, handle_api
 from core import init_db
 
 
@@ -40,6 +40,25 @@ class LocalWebHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/export":
+            try:
+                event_id = parse_qs(parsed.query).get("eventId", ["__all__"])[0]
+                body, filename = build_event_export(event_id)
+                self.send_response(200)
+                self.send_header(
+                    "Content-Type",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename*=UTF-8''{quote(filename)}")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as exc:
+                traceback.print_exc()
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
         if parsed.path in ("/", "/index.html"):
             path = os.path.join(STATIC_DIR, "index.html")
         elif parsed.path.startswith("/static/"):

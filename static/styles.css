@@ -210,6 +210,21 @@
     .toolbar select {
       width: min(360px, 100%);
     }
+    .toolbarActions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .toolbarButton {
+      min-width: 104px;
+      min-height: 40px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border-color: var(--line);
+      background: var(--blueSoft);
+      color: var(--blue2);
+      font-weight: 400;
+    }
     .sectionTitle {
       display: flex;
       align-items: center;
@@ -404,6 +419,15 @@
       border-radius: 999px;
       color: #fff;
     }
+    .syncWeightNote {
+      margin: -2px 0 12px;
+      padding: 10px 12px;
+      border-left: 3px solid #8b5cf6;
+      color: var(--muted);
+      background: #f7f5ff;
+      font-size: 13px;
+      line-height: 1.65;
+    }
     .historyIdLegend { background: var(--blue); }
     .historyJoinLegend { background: #7c3aed; }
     .historyWinLegend { background: var(--green); }
@@ -461,4 +485,6 @@
       .shell { grid-template-columns: 1fr; height: auto; }
       .content { min-height: 640px; }
       .historyControls { grid-template-columns: 1fr; }
+      .toolbarActions { width: 100%; margin-left: 0; }
+      .toolbarButton { flex: 1; }
     }

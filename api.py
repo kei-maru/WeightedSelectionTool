@@ -1,7 +1,9 @@
 import datetime
+import io
 import json
 import os
 import random
+import re
 import sqlite3
 import tempfile
 from email.parser import BytesParser
@@ -354,6 +356,20 @@ def event_db_id(event_id):
     return 0 if event_id in ("", None, "__default__") else safe_int(event_id, 0)
 
 
+def get_setting(conn, key, fallback=""):
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key=?", (key,)
+    ).fetchone()
+    return row[0] if row else fallback
+
+
+def set_setting(conn, key, value):
+    conn.execute("""
+        INSERT INTO app_settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, str(value)))
+
+
 def participant_event_totals(conn, participant_ids, event_id):
     ids = [safe_int(value, None) for value in participant_ids if safe_int(value, None)]
     if not ids:
@@ -376,22 +392,30 @@ def participant_event_totals(conn, participant_ids, event_id):
 def db_snapshot():
     conn = sqlite3.connect(db_path())
     conn.row_factory = sqlite3.Row
-    user_event_id = STATE.get("user_event_id")
+    default_event_name = get_setting(conn, "default_event_name", "default")
+    default_event_enabled = get_setting(conn, "default_event_enabled", "1") == "1"
 
     events = [dict(row) for row in conn.execute("""
         SELECT id, name, description, created_at
         FROM events
         ORDER BY id DESC
     """).fetchall()]
+    if not default_event_enabled and events:
+        if STATE.get("event_id") in (None, "", "__default__"):
+            STATE["event_id"] = events[0]["id"]
+        if STATE.get("user_event_id") in (None, "", "__default__"):
+            STATE["user_event_id"] = events[0]["id"]
+    user_event_id = STATE.get("user_event_id")
 
     sessions = [dict(row) for row in conn.execute("""
-        SELECT s.id, s.event_id, COALESCE(e.name, 'default') AS event_name,
+        SELECT s.id, s.event_id,
+               CASE WHEN s.event_id IS NULL THEN ? ELSE COALESCE(e.name, ?) END AS event_name,
                s.session_name, s.csv_file, s.mode, s.draw_count, s.created_at, s.notes
         FROM raffle_sessions s
         LEFT JOIN events e ON e.id = s.event_id
         ORDER BY s.id DESC
         LIMIT 50
-    """).fetchall()]
+    """, (default_event_name, default_event_name)).fetchall()]
 
     latest_session_id = sessions[0]["id"] if sessions else None
     latest_payload = db_session_results(conn, latest_session_id) if latest_session_id else {
@@ -433,13 +457,14 @@ def db_snapshot():
             "winner": False,
         }
     batches = [dict(row) for row in conn.execute("""
-        SELECT b.id, b.event_id, CASE WHEN b.event_id=0 THEN 'default' ELSE COALESCE(e.name, 'default') END AS event_name,
+        SELECT b.id, b.event_id,
+               CASE WHEN b.event_id=0 THEN ? ELSE COALESCE(e.name, ?) END AS event_name,
                b.filename, b.sync_mode, b.row_count, b.created_at, b.undone_at
         FROM history_sync_batches b
         LEFT JOIN events e ON e.id = b.event_id
         ORDER BY b.id DESC
         LIMIT 20
-    """).fetchall()]
+    """, (default_event_name, default_event_name)).fetchall()]
     conn.close()
     users = list(users_by_id.values())
     users = dedupe_user_rows(users)
@@ -461,7 +486,107 @@ def db_snapshot():
         "savedUserDisplayColumns": [],
         "userEventId": user_event_id,
         "historySyncBatches": batches,
+        "defaultEventName": default_event_name,
+        "defaultEventEnabled": default_event_enabled,
     }
+
+
+def build_event_export(event_id):
+    conn = sqlite3.connect(db_path())
+    conn.row_factory = sqlite3.Row
+    default_name = get_setting(conn, "default_event_name", "default")
+    if event_id in ("", None, "__all__"):
+        event_name = "すべて"
+        user_sql = """
+            SELECT p.display_name, p.vrc_id, p.x_id,
+                   SUM(h.join_count) AS join_count,
+                   SUM(h.win_count) AS win_count,
+                   SUM(h.streak_count) AS streak_count
+            FROM event_participant_history h
+            JOIN participants p ON p.id=h.participant_id
+            GROUP BY p.id, p.display_name, p.vrc_id, p.x_id
+            ORDER BY p.display_name
+        """
+        user_params = []
+        session_where = ""
+        session_params = []
+    else:
+        db_event_id = event_db_id(event_id)
+        if db_event_id == 0:
+            event_name = default_name
+            session_where = "WHERE s.event_id IS NULL"
+            session_params = []
+        else:
+            row = conn.execute("SELECT name FROM events WHERE id=?", (db_event_id,)).fetchone()
+            if not row:
+                conn.close()
+                raise ValueError("出力するEventが見つかりません。")
+            event_name = row["name"]
+            session_where = "WHERE s.event_id=?"
+            session_params = [db_event_id]
+        user_sql = """
+            SELECT p.display_name, p.vrc_id, p.x_id,
+                   h.join_count, h.win_count, h.streak_count
+            FROM event_participant_history h
+            JOIN participants p ON p.id=h.participant_id
+            WHERE h.event_id=?
+            ORDER BY p.display_name
+        """
+        user_params = [db_event_id]
+
+    users = [dict(row) for row in conn.execute(user_sql, user_params).fetchall()]
+    mode = "equal" if FREE_BUILD else STATE.get("mode", "linear")
+    weights = [1.0] * len(users) if mode == "equal" else calc_weights(users, mode, max(len(users), 1))
+    total_weight = sum(weights) or 1.0
+    sheet1 = []
+    for row, weight in zip(users, weights):
+        sheet1.append({
+            "抽選ID": row.get("display_name") or row.get("vrc_id") or row.get("x_id") or "unknown",
+            "参加回数": safe_int(row.get("join_count"), 0),
+            "当選回数": safe_int(row.get("win_count"), 0),
+            "重み": weight,
+            "現在確率": weight / total_weight,
+        })
+
+    result_rows = conn.execute(f"""
+        SELECT s.id AS session_id, s.created_at, s.mode, s.draw_count, s.csv_file,
+               CASE WHEN s.event_id IS NULL THEN ? ELSE COALESCE(e.name, ?) END AS event_name,
+               COALESCE(r.display_name, r.vrc_id, r.x_id, 'unknown') AS draw_id,
+               r.extra_display_json
+        FROM raffle_sessions s
+        JOIN raffle_results r ON r.session_id=s.id
+        LEFT JOIN events e ON e.id=s.event_id
+        {session_where}
+        ORDER BY s.id DESC, r.id
+    """, [default_name, default_name, *session_params]).fetchall()
+    sheet2 = []
+    for row in result_rows:
+        sheet2.append({
+            "Session": row["session_id"],
+            "日時": str(row["created_at"] or "").replace("T", " ")[:16],
+            "Event": row["event_name"],
+            "抽選ID": row["draw_id"],
+            "確率モード": row["mode"],
+            "抽選人数": row["draw_count"],
+            "CSV": row["csv_file"],
+            "表示内容": row["extra_display_json"] or "",
+        })
+    conn.close()
+
+    sheet1_columns = ["抽選ID", "参加回数", "当選回数", "重み", "現在確率"]
+    sheet2_columns = ["Session", "日時", "Event", "抽選ID", "確率モード", "抽選人数", "CSV", "表示内容"]
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame(sheet1, columns=sheet1_columns).to_excel(writer, sheet_name="Sheet1", index=False)
+        pd.DataFrame(sheet2, columns=sheet2_columns).to_excel(writer, sheet_name="Sheet2", index=False)
+        sheet = writer.book["Sheet1"]
+        for cell in sheet["E"][1:]:
+            cell.number_format = "0.00%"
+        for worksheet in writer.book.worksheets:
+            worksheet.freeze_panes = "A2"
+            worksheet.auto_filter.ref = worksheet.dimensions
+    safe_name = re.sub(r"[^0-9A-Za-zぁ-んァ-ヶ一-龠_-]+", "_", event_name).strip("_") or "event"
+    return output.getvalue(), f"{safe_name}_抽選履歴.xlsx"
 
 
 def db_session_results(conn, session_id):
@@ -579,6 +704,8 @@ def public_state(message=""):
         "savedUsers": snapshot["savedUsers"],
         "sessions": snapshot["sessions"],
         "events": snapshot["events"],
+        "defaultEventName": snapshot["defaultEventName"],
+        "defaultEventEnabled": snapshot["defaultEventEnabled"],
         "eventId": STATE.get("event_id"),
         "userEventId": snapshot["userEventId"],
         "savedLatestSessionId": snapshot["latestSessionId"],
@@ -1101,7 +1228,7 @@ def handle_session_delete(payload):
 def handle_event_select(payload):
     event_id = safe_int(payload.get("eventId"), None)
     STATE["event_id"] = event_id
-    return public_state("Eventを選択しました。" if event_id else "Eventをdefaultにしました。")
+    return public_state("Eventを選択しました。")
 
 
 def handle_user_event(payload):
@@ -1111,12 +1238,19 @@ def handle_user_event(payload):
 
 
 def handle_event_save(payload):
-    event_id = safe_int(payload.get("eventId"), None)
+    raw_event_id = payload.get("eventId")
+    event_id = safe_int(raw_event_id, None)
     name = str(payload.get("name", "")).strip()
     description = str(payload.get("description", "")).strip()
     if not name:
         raise ValueError("Event名を入力してください。")
     conn = sqlite3.connect(db_path())
+    if raw_event_id == "__default__":
+        set_setting(conn, "default_event_name", name)
+        set_setting(conn, "default_event_enabled", "1")
+        conn.commit()
+        conn.close()
+        return public_state(f"Event「{name}」へ名前を変更しました。")
     if event_id:
         cur = conn.execute(
             "UPDATE events SET name=?, description=? WHERE id=?",
@@ -1144,11 +1278,86 @@ def handle_event_save(payload):
 
 
 def handle_event_delete(payload):
-    event_id = safe_int(payload.get("eventId"), None)
+    raw_event_id = payload.get("eventId")
+    event_id = safe_int(raw_event_id, None)
+    if raw_event_id == "__default__":
+        target_event_id = safe_int(payload.get("targetEventId"), None)
+        conn = sqlite3.connect(db_path())
+        conn.row_factory = sqlite3.Row
+        targets = conn.execute(
+            "SELECT id, name FROM events ORDER BY id DESC"
+        ).fetchall()
+        target = next(
+            (row for row in targets if row["id"] == target_event_id),
+            targets[0] if targets else None)
+        if not target:
+            conn.close()
+            raise ValueError("他のEventがないため、defaultは削除できません。")
+        now = datetime.datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO event_participant_history
+            (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+            SELECT ?, participant_id, join_count, win_count, streak_count, ?
+            FROM event_participant_history WHERE event_id=0
+            ON CONFLICT(event_id, participant_id) DO UPDATE SET
+                join_count=event_participant_history.join_count+excluded.join_count,
+                win_count=event_participant_history.win_count+excluded.win_count,
+                streak_count=event_participant_history.streak_count+excluded.streak_count,
+                updated_at=excluded.updated_at
+        """, (target["id"], now))
+        conn.execute("DELETE FROM event_participant_history WHERE event_id=0")
+        conn.execute(
+            "UPDATE raffle_sessions SET event_id=? WHERE event_id IS NULL",
+            (target["id"],))
+        conn.execute("""
+            UPDATE history_sync_batches
+            SET undone_at=COALESCE(undone_at, ?)
+            WHERE event_id=0
+        """, (now,))
+        set_setting(conn, "default_event_enabled", "0")
+        conn.commit()
+        conn.close()
+        STATE["event_id"] = target["id"]
+        if STATE.get("user_event_id") in (None, "", "__default__"):
+            STATE["user_event_id"] = target["id"]
+        return public_state(
+            f"defaultを削除し、保存データをEvent「{target['name']}」へ移動しました。")
     if not event_id:
         raise ValueError("Eventを選択してください。")
     conn = sqlite3.connect(db_path())
-    conn.execute("UPDATE raffle_sessions SET event_id=NULL WHERE event_id=?", (event_id,))
+    default_enabled = get_setting(conn, "default_event_enabled", "1") == "1"
+    if default_enabled:
+        fallback_event_id = 0
+        conn.execute("UPDATE raffle_sessions SET event_id=NULL WHERE event_id=?", (event_id,))
+    else:
+        fallback = conn.execute(
+            "SELECT id FROM events WHERE id<>? ORDER BY id DESC LIMIT 1",
+            (event_id,)).fetchone()
+        if not fallback:
+            conn.close()
+            raise ValueError("移動先がないため、このEventは削除できません。")
+        conn.execute(
+            "UPDATE raffle_sessions SET event_id=? WHERE event_id=?",
+            (fallback[0], event_id))
+        fallback_event_id = fallback[0]
+    now = datetime.datetime.now().isoformat()
+    conn.execute("""
+        INSERT INTO event_participant_history
+        (event_id, participant_id, join_count, win_count, streak_count, updated_at)
+        SELECT ?, participant_id, join_count, win_count, streak_count, ?
+        FROM event_participant_history WHERE event_id=?
+        ON CONFLICT(event_id, participant_id) DO UPDATE SET
+            join_count=event_participant_history.join_count+excluded.join_count,
+            win_count=event_participant_history.win_count+excluded.win_count,
+            streak_count=event_participant_history.streak_count+excluded.streak_count,
+            updated_at=excluded.updated_at
+    """, (fallback_event_id, now, event_id))
+    conn.execute("DELETE FROM event_participant_history WHERE event_id=?", (event_id,))
+    conn.execute("""
+        UPDATE history_sync_batches
+        SET undone_at=COALESCE(undone_at, ?)
+        WHERE event_id=?
+    """, (now, event_id))
     cur = conn.execute("DELETE FROM events WHERE id=?", (event_id,))
     conn.commit()
     conn.close()
@@ -1158,7 +1367,7 @@ def handle_event_delete(payload):
         STATE["event_id"] = None
     if STATE.get("user_event_id") == event_id:
         STATE["user_event_id"] = "__all__"
-    return public_state("Eventを削除しました。関連Sessionはdefaultに戻しました。")
+    return public_state("Eventを削除し、関連Sessionを利用可能なEventへ移動しました。")
 
 
 def handle_mode(payload):

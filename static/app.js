@@ -2,6 +2,7 @@ const state = {
       columns: [], rows: [], users: [], results: [],
       idColumn: null, displayColumns: [], latestSessionId: null,
       events: [], eventId: null, userEventId: null,
+      defaultEventName: "default", defaultEventEnabled: true,
       savedUsers: [], savedResults: [], sessions: [], savedLatestSessionId: null,
       resultDisplayColumns: [], savedUserDisplayColumns: [],
       selectedSessionId: null, selectedResults: [], selectedResultDisplayColumns: [],
@@ -64,7 +65,8 @@ const state = {
       $("fileName").textContent = state.csvFile || "CSV / Excel を読み込んでください。";
       $("mode").value = state.mode || $("mode").value;
       if ($("eventSelect")) {
-        $("eventSelect").innerHTML = '<option value="">default</option>' + state.events.map(event =>
+        $("eventSelect").innerHTML = (state.defaultEventEnabled
+          ? `<option value="">${escapeHtml(state.defaultEventName)}</option>` : "") + state.events.map(event =>
           `<option value="${event.id}">${escapeHtml(event.name)}</option>`
         ).join("");
         $("eventSelect").value = state.eventId || "";
@@ -83,6 +85,8 @@ const state = {
         displayColumns: data.displayColumns || [],
         latestSessionId: data.latestSessionId || null,
         events: data.events || [],
+        defaultEventName: data.defaultEventName || "default",
+        defaultEventEnabled: data.defaultEventEnabled !== false,
         eventId: data.eventId || null,
         userEventId: data.userEventId || null,
         savedUsers: data.savedUsers || [],
@@ -219,13 +223,17 @@ const state = {
       </div>`;
     }
     function renderEvents() {
-      const defaultRow = `<tr>
+      const defaultRow = state.defaultEventEnabled ? `<tr>
             <td>default</td>
-            <td>default</td>
-            <td>Eventを選ばない場合の保存先です。</td>
+            <td>${escapeHtml(state.defaultEventName)}</td>
+            <td>最初から用意されているEventです。</td>
             <td>-</td>
-            <td>-</td>
-          </tr>`;
+            <td>
+              <button class="tinyButton eventEdit" type="button" data-event="__default__">編集</button>
+              <button class="tinyButton eventDelete" type="button" data-event="__default__"
+                ${state.events.length ? "" : "disabled"}>削除</button>
+            </td>
+          </tr>` : "";
       const rows = defaultRow + (state.events.length
         ? state.events.map(event => `<tr>
             <td>#${escapeHtml(event.id)}</td>
@@ -269,10 +277,15 @@ const state = {
         <span class="hint">表示するEvent</span>
         <select id="userEventSelect">
           <option value="__all__" ${String(state.userEventId || "__all__") === "__all__" ? "selected" : ""}>すべて</option>
-          <option value="__default__" ${String(state.userEventId || "") === "__default__" ? "selected" : ""}>default</option>
+          ${state.defaultEventEnabled
+            ? `<option value="__default__" ${String(state.userEventId || "") === "__default__" ? "selected" : ""}>${escapeHtml(state.defaultEventName)}</option>`
+            : ""}
           ${state.events.map(event => `<option value="${event.id}" ${String(state.userEventId || "") === String(event.id) ? "selected" : ""}>${escapeHtml(event.name)}</option>`).join("")}
         </select>
-        <button id="historySyncOpen" class="soft" type="button">データ同期</button>
+        <div class="toolbarActions">
+          <button id="historySyncOpen" class="toolbarButton" type="button">データ同期</button>
+          <button id="userExport" class="toolbarButton" type="button">Excel出力</button>
+        </div>
       </div>`;
       if (!rows.length) return selector + '<div class="empty">このEventの保存済みユーザーがありません。抽選を実行すると追加されます。</div>';
       const headers = ["抽選ID", ...displayColumns, "参加回数", "当選回数", "重み", "現在確率"]
@@ -297,7 +310,9 @@ const state = {
       const currentEvent = $("historyEvent").value;
       const currentMode = $("historyMode").value || historyMode;
       const eventOptions = [
-        '<option value="__default__">default</option>',
+        ...(state.defaultEventEnabled
+          ? [`<option value="__default__">${escapeHtml(state.defaultEventName)}</option>`]
+          : []),
         ...state.events.map(event => `<option value="${event.id}">${escapeHtml(event.name)}</option>`)
       ].join("");
       $("historyEvent").innerHTML = eventOptions;
@@ -402,6 +417,12 @@ const state = {
       if ($("historySyncOpen")) {
         $("historySyncOpen").addEventListener("click", openHistoryModal);
       }
+      if ($("userExport")) {
+        $("userExport").addEventListener("click", () => {
+          const eventId = $("userEventSelect")?.value || "__all__";
+          window.location.href = `/api/export?eventId=${encodeURIComponent(eventId)}`;
+        });
+      }
       if ($("userEventSelect")) {
         $("userEventSelect").addEventListener("change", async () => {
           try {
@@ -434,6 +455,13 @@ const state = {
       }
       document.querySelectorAll(".eventEdit").forEach(button => {
         button.addEventListener("click", () => {
+          if (button.dataset.event === "__default__") {
+            setValue("eventEditId", "__default__");
+            setValue("eventEditName", state.defaultEventName);
+            setValue("eventEditDescription", "");
+            $("eventEditName").focus();
+            return;
+          }
           const event = state.events.find(item => String(item.id) === String(button.dataset.event));
           if (!event) return;
           setValue("eventEditId", event.id);
@@ -444,9 +472,18 @@ const state = {
       });
       document.querySelectorAll(".eventDelete").forEach(button => {
         button.addEventListener("click", async () => {
-          if (!confirm(`Event #${button.dataset.event} を削除しますか？`)) return;
+          let targetEventId = null;
+          if (button.dataset.event === "__default__") {
+            const target = state.events.find(item => String(item.id) === String(state.eventId)) || state.events[0];
+            if (!target) return;
+            if (!confirm(`${state.defaultEventName}を削除しますか？\nユーザー履歴と抽選記録は「${target.name}」へ移動します。`)) return;
+            targetEventId = target.id;
+          } else if (!confirm(`Event #${button.dataset.event} を削除しますか？`)) return;
           try {
-            mergeState(await postJson("/api/event/delete", { eventId: button.dataset.event }), "events");
+            mergeState(await postJson("/api/event/delete", {
+              eventId: button.dataset.event,
+              targetEventId
+            }), "events");
           } catch (err) {
             setStatus(err.message);
           }
