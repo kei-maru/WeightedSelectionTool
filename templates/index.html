@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google form抽選ツール Local Web</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260713-15">
+  <link rel="stylesheet" href="/static/styles.css?v=20260714-01">
 </head>
 <body>
   <header>
@@ -127,7 +127,7 @@
   </div>
   <div class="modalOverlay" id="historyModal">
     <div class="modal historyModal">
-      <h2>以前の履歴を同期</h2>
+      <h2>履歴を同期</h2>
       <div class="historyControls">
         <div>
           <label>同期先Event</label>
@@ -143,6 +143,13 @@
       </div>
       <input id="historyFile" type="file" accept=".csv,.xls,.xlsx" hidden>
       <button id="historyUploadButton" class="soft" type="button">CSV / Excel を選択</button>
+      <div class="historyInstruction">
+        <strong>履歴ファイルの列を選択してください</strong>
+        <div>1. 「CSV / Excel を選択」から、以前の履歴ファイルを読み込みます。</div>
+        <div>2. 表の列見出しを左クリックし、<span class="blueText">抽選ID列</span>、<span class="purpleText">参加回数列</span>、<span class="greenText">当選回数列</span>の順に指定してください。</div>
+        <div>3. 指定した列は色付きになります。もう一度左クリックすると、その指定を解除できます。</div>
+        <div>4. <span class="orangeText">追加</span>は現在の回数に加算し、<span class="orangeText">上書き</span>はこのEventのユーザー一覧を読み込んだ内容に入れ替えます。</div>
+      </div>
       <div class="historyGuide">
         <span class="historyIdLegend">1. ID列</span>
         <span class="historyJoinLegend">2. 参加回数列</span>
