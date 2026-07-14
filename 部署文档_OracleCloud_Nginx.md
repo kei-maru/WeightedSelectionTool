@@ -25,13 +25,13 @@ Docker Compose + FastAPI
 建议配置：
 
 - Oracle Cloud Compute：Ubuntu 22.04 或 24.04
-- 域名：例如 `raffle.example.com`
+- 子域名：`raffle.keimarustudio.com`
 - Nginx：安装在宿主机
 - FastAPI：运行在 Docker 容器
 - SQLite 数据：保存在宿主机 `./data`
 - HTTPS：Let's Encrypt + Certbot
 
-本文中的 `raffle.example.com`、Git 仓库地址和用户名都需要替换为你的实际值。
+本文以 `raffle.keimarustudio.com` 为正式访问地址。若改用其他子域名，请将文中的域名、Nginx `server_name`、证书申请命令和 X OAuth 回调地址一并替换。
 
 ## 2. Oracle Cloud 网络配置
 
@@ -55,21 +55,25 @@ Docker Compose + FastAPI
 
 OCI 的 Security List/NSG 和实例操作系统防火墙都必须允许请求通过。Oracle 官方说明这两层规则都会影响实例网络访问：[OCI Security Rules](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securityrules.htm)、[Ways to Secure a Network](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/waystosecure.htm)。
 
-## 3. 配置域名
+## 3. 配置子域名
 
-在 DNS 服务商添加 A 记录：
+在管理 `keimarustudio.com` 的 DNS 服务商控制台中新增以下记录：
 
-```text
-raffle.example.com -> Oracle Cloud 实例公网 IPv4
-```
+| 类型 | 主机记录 / Name | 值 / Content | TTL |
+| --- | --- | --- | --- |
+| A | `raffle` | Oracle Cloud 实例的公网 IPv4 | Auto 或 600 |
 
-确认解析：
+记录生效后，`raffle.keimarustudio.com` 就会解析到你的 OCI 服务器。DNS 控制台中的「主机记录」通常只需填写 `raffle`，不要填写完整域名；如果控制台要求完整名称，则填写 `raffle.keimarustudio.com`。
+
+在服务器或本地终端确认解析：
 
 ```bash
-dig +short raffle.example.com
+dig +short raffle.keimarustudio.com
 ```
 
-返回值应当是 Oracle Cloud 实例的公网 IP。
+返回值应与 OCI 实例的公网 IP 一致。DNS 传播通常在几分钟内完成，少数 DNS 服务商可能需要更久。**解析正确且 80 端口可从公网访问后，再申请 HTTPS 证书。**
+
+如需让另一个子域名也访问同一服务，可新增另一条 A/CNAME 记录，并在 Nginx、Certbot 和 X Callback URI 中同时加入该域名；否则只保留一个正式域名，避免 OAuth 回调地址混乱。
 
 ## 4. 初始化 Ubuntu
 
@@ -189,7 +193,7 @@ openssl rand -hex 32
 AUTH_REQUIRED=1
 X_CLIENT_ID=YOUR_X_CLIENT_ID
 X_CLIENT_SECRET=YOUR_X_CLIENT_SECRET
-X_REDIRECT_URI=https://raffle.example.com/auth/callback
+X_REDIRECT_URI=https://raffle.keimarustudio.com/auth/callback
 SESSION_SECRET=PASTE_THE_RANDOM_VALUE_HERE
 
 COOKIE_SECURE=1
@@ -213,7 +217,7 @@ ALLOWED_X_USERNAMES=
 
 ```text
 Callback URI / Redirect URL:
-https://raffle.example.com/auth/callback
+https://raffle.keimarustudio.com/auth/callback
 ```
 
 需要的 scope：
@@ -260,7 +264,7 @@ server {
     listen 80;
     listen [::]:80;
 
-    server_name raffle.example.com;
+    server_name raffle.keimarustudio.com;
 
     client_max_body_size 30m;
 
@@ -294,7 +298,7 @@ sudo systemctl reload nginx
 检查 HTTP：
 
 ```bash
-curl -I http://raffle.example.com/
+curl -I http://raffle.keimarustudio.com/
 ```
 
 Nginx 默认不会原样传递原始 Host，因此这里显式设置 `Host` 和转发请求信息。相关指令参考 [Nginx ngx_http_proxy_module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)。
@@ -311,7 +315,7 @@ sudo ln -s /snap/bin/certbot /usr/local/bin/certbot
 申请证书并让 Certbot 修改 Nginx：
 
 ```bash
-sudo certbot --nginx -d raffle.example.com
+sudo certbot --nginx -d raffle.keimarustudio.com
 ```
 
 测试自动续期：
@@ -325,14 +329,14 @@ sudo certbot renew --dry-run
 最终检查：
 
 ```bash
-curl -I https://raffle.example.com/
+curl -I https://raffle.keimarustudio.com/
 ```
 
 ## 12. 上线验收
 
 依次检查：
 
-1. 访问 `https://raffle.example.com/`，直接进入主界面。
+1. 访问 `https://raffle.keimarustudio.com/`，直接进入主界面。
 2. 未登录时显示 `単発抽選モード（未登録）`。
 3. 未登录抽选固定为均等概率，可以设置特别条件。
 4. 未登录抽选不出现在历史记录和用户一览中。
