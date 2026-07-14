@@ -102,9 +102,9 @@ class AccountAuthService:
         return datetime.datetime.now().isoformat(timespec="seconds")
 
     @staticmethod
-    def _redirect_login(error="", message=""):
+    def _redirect_login(error="", message="", register=False):
         query = urlencode({key: value for key, value in {
-            "error": error, "message": message
+            "error": error, "message": message, "register": "1" if register else ""
         }.items() if value})
         return RedirectResponse(f"/login{f'?{query}' if query else ''}", status_code=303)
 
@@ -195,17 +195,19 @@ class AccountAuthService:
         self._check_x_allowlist(user)
         return self._finish_login(request, self._save_x_user(user))
 
-    def register_email(self, request, email, password, display_name):
+    def register_email(self, request, email, password, password_confirm, display_name):
         if not self.settings.required:
             return RedirectResponse("/")
         email = self._normalize_email(email)
         display_name = str(display_name or "").strip() or email.split("@", 1)[0]
         if not EMAIL_PATTERN.fullmatch(email) or len(email) > 254:
-            return self._redirect_login(error="メールアドレスの形式を確認してください。")
+            return self._redirect_login(error="メールアドレスの形式を確認してください。", register=True)
         if len(password or "") < 8:
-            return self._redirect_login(error="パスワードは8文字以上で設定してください。")
+            return self._redirect_login(error="パスワードは8文字以上で設定してください。", register=True)
+        if password != password_confirm:
+            return self._redirect_login(error="確認用パスワードが一致しません。", register=True)
         if len(password) > 1024 or len(display_name) > 80:
-            return self._redirect_login(error="入力内容が長すぎます。")
+            return self._redirect_login(error="入力内容が長すぎます。", register=True)
 
         salt = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
         now = self._now()
@@ -220,7 +222,7 @@ class AccountAuthService:
             user_id = cursor.lastrowid
             conn.commit()
         except sqlite3.IntegrityError:
-            return self._redirect_login(error="このメールアドレスはすでに登録されています。")
+            return self._redirect_login(error="このメールアドレスはすでに登録されています。", register=True)
         finally:
             conn.close()
         return self._finish_login(request, self._email_session_user(user_id, email, display_name))
@@ -360,9 +362,12 @@ async def email_register(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    password_confirm: str = Form(...),
     display_name: str = Form(""),
 ):
-    return auth_service.register_email(request, email, password, display_name)
+    return auth_service.register_email(
+        request, email, password, password_confirm, display_name
+    )
 
 
 @auth_router.post("/auth/email/login", include_in_schema=False)

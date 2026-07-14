@@ -42,7 +42,7 @@ class EmailAuthTests(unittest.TestCase):
     def test_register_then_login_uses_email_account_identity(self):
         request = FakeRequest()
         response = self.service.register_email(
-            request, "staff@example.com", "password-123", "スタッフ"
+            request, "staff@example.com", "password-123", "password-123", "スタッフ"
         )
 
         self.assertEqual(response.headers["location"], "/")
@@ -58,11 +58,11 @@ class EmailAuthTests(unittest.TestCase):
 
     def test_duplicate_or_invalid_password_returns_to_login(self):
         self.service.register_email(
-            FakeRequest(), "staff@example.com", "password-123", "スタッフ"
+            FakeRequest(), "staff@example.com", "password-123", "password-123", "スタッフ"
         )
 
         duplicate = self.service.register_email(
-            FakeRequest(), "staff@example.com", "password-456", "別ユーザー"
+            FakeRequest(), "staff@example.com", "password-456", "password-456", "別ユーザー"
         )
         self.assertIn("error=", duplicate.headers["location"])
 
@@ -70,6 +70,11 @@ class EmailAuthTests(unittest.TestCase):
             FakeRequest(), "staff@example.com", "wrong-password"
         )
         self.assertIn("error=", invalid.headers["location"])
+
+        mismatch = self.service.register_email(
+            FakeRequest(), "new@example.com", "password-123", "password-456", "新規"
+        )
+        self.assertIn("register=1", mismatch.headers["location"])
 
         conn = sqlite3.connect(os.environ["DB_PATH"])
         row = conn.execute(

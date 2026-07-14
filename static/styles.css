@@ -502,6 +502,7 @@
       grid-template-columns: 1fr 1fr;
       gap: 12px;
     }
+    #historyUploadButton { margin-top: 14px; }
     .historyGuide {
       display: flex;
       flex-wrap: wrap;

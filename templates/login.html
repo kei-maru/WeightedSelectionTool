@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ログイン | Google form抽選ツール</title>
-  <link rel="stylesheet" href="/static/login.css?v=20260714-01">
+  <link rel="stylesheet" href="/static/login.css?v=20260714-02">
 </head>
 <body>
   <main class="loginPanel">
@@ -13,9 +13,6 @@
     <h1>ログイン</h1>
     <p class="description">ログインすると、Event・参加者履歴・抽選結果をアカウントごとに保存できます。</p>
     <p id="loginMessage" class="loginMessage" hidden aria-live="polite"></p>
-
-    <a id="xLogin" class="xLogin" href="/auth/x/login">Xでログイン</a>
-    <div id="loginDivider" class="divider"><span>または</span></div>
 
     <section class="emailSection" aria-labelledby="emailLoginTitle">
       <h2 id="emailLoginTitle">メールアドレスでログイン</h2>
@@ -28,33 +25,75 @@
       </form>
     </section>
 
-    <details class="registerDetails">
-      <summary>メールアドレスで新規登録</summary>
-      <form action="/auth/email/register" method="post" class="authForm registerForm">
+    <button id="openRegister" class="registerButton" type="button">メールアドレスで新規登録</button>
+    <div id="loginDivider" class="divider"><span>または</span></div>
+    <a id="xLogin" class="xLogin" href="/auth/x/login">Xでログイン</a>
+
+    <a class="guestLogin" href="/auth/guest">ログインせずに単発抽選を使う</a>
+    <p class="guestNote">単発抽選では履歴を保存せず、均等確率で抽選します。</p>
+    <p class="privacy">メールアドレスはログイン管理のために保存します。パスワードは安全なハッシュ形式で保存されます。</p>
+  </main>
+  <div id="registerModal" class="registerOverlay" hidden>
+    <section class="registerModal" role="dialog" aria-modal="true" aria-labelledby="registerTitle">
+      <div class="modalHeader">
+        <div>
+          <p class="eyebrow">Google form抽選ツール</p>
+          <h2 id="registerTitle">新規登録</h2>
+        </div>
+        <button id="closeRegister" class="closeButton" type="button" aria-label="閉じる">×</button>
+      </div>
+      <p class="modalDescription">登録後、抽選履歴をこのアカウントに保存できます。</p>
+      <p id="registerMessage" class="loginMessage" hidden aria-live="polite"></p>
+      <form action="/auth/email/register" method="post" class="authForm registerForm" id="registerForm">
         <label for="registerName">表示名 <span>任意</span></label>
         <input id="registerName" name="display_name" type="text" maxlength="80" autocomplete="nickname">
         <label for="registerEmail">メールアドレス</label>
         <input id="registerEmail" name="email" type="email" autocomplete="email" required>
         <label for="registerPassword">パスワード <span>8文字以上</span></label>
         <input id="registerPassword" name="password" type="password" minlength="8" autocomplete="new-password" required>
+        <label for="registerPasswordConfirm">パスワード（確認）</label>
+        <input id="registerPasswordConfirm" name="password_confirm" type="password" minlength="8" autocomplete="new-password" required>
+        <p id="passwordMismatch" class="passwordMismatch" hidden>パスワードが一致しません。</p>
         <button class="emailLogin" type="submit">アカウントを作成</button>
       </form>
-    </details>
-
-    <a class="guestLogin" href="/auth/guest">ログインせずに単発抽選を使う</a>
-    <p class="guestNote">単発抽選では履歴を保存せず、均等確率で抽選します。</p>
-    <p class="privacy">メールアドレスはログイン管理のために保存します。パスワードは安全なハッシュ形式で保存されます。</p>
-  </main>
+    </section>
+  </div>
   <footer class="loginFooter"><span>Keimaru Studio</span></footer>
   <script>
     const params = new URLSearchParams(window.location.search);
+    const registerModal = document.getElementById("registerModal");
+    const openRegister = () => {
+      registerModal.hidden = false;
+      document.getElementById("registerEmail").focus();
+    };
+    const closeRegister = () => { registerModal.hidden = true; };
+    document.getElementById("openRegister").addEventListener("click", openRegister);
+    document.getElementById("closeRegister").addEventListener("click", closeRegister);
+    registerModal.addEventListener("click", event => {
+      if (event.target === registerModal) closeRegister();
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && !registerModal.hidden) closeRegister();
+    });
+    const registrationError = params.get("register") === "1" && Boolean(params.get("error"));
     const message = params.get("error") || params.get("message");
     if (message) {
-      const target = document.getElementById("loginMessage");
+      const target = document.getElementById(registrationError ? "registerMessage" : "loginMessage");
       target.textContent = message;
       target.hidden = false;
       target.classList.toggle("error", Boolean(params.get("error")));
     }
+    if (params.get("register") === "1") openRegister();
+    const password = document.getElementById("registerPassword");
+    const confirmation = document.getElementById("registerPasswordConfirm");
+    const mismatch = document.getElementById("passwordMismatch");
+    const validatePassword = () => {
+      const invalid = Boolean(confirmation.value) && password.value !== confirmation.value;
+      confirmation.setCustomValidity(invalid ? "パスワードが一致しません。" : "");
+      mismatch.hidden = !invalid;
+    };
+    password.addEventListener("input", validatePassword);
+    confirmation.addEventListener("input", validatePassword);
     fetch("/api/auth/me", { cache: "no-store" })
       .then(response => response.json())
       .then(data => {
