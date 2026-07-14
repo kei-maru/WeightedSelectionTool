@@ -4,19 +4,66 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ログイン | Google form抽選ツール</title>
-  <link rel="stylesheet" href="/static/login.css?v=20260713-4">
+  <link rel="stylesheet" href="/static/login.css?v=20260714-01">
 </head>
 <body>
   <main class="loginPanel">
     <div class="brandMark">G</div>
     <p class="eyebrow">Google form抽選ツール</p>
     <h1>ログイン</h1>
-    <p class="description">抽選データを管理するには、許可されたXアカウントでログインしてください。</p>
-    <a class="xLogin" href="/auth/login">Xでログイン</a>
-    <a class="guestLogin" href="/auth/guest">保存せずに1回だけ抽選</a>
-    <p class="guestNote">ゲスト抽選は均等確率です。特別条件の倍率だけ設定できます。</p>
-    <p class="privacy">認証用トークンは保存しません。</p>
+    <p class="description">ログインすると、Event・参加者履歴・抽選結果をアカウントごとに保存できます。</p>
+    <p id="loginMessage" class="loginMessage" hidden aria-live="polite"></p>
+
+    <a id="xLogin" class="xLogin" href="/auth/x/login">Xでログイン</a>
+    <div id="loginDivider" class="divider"><span>または</span></div>
+
+    <section class="emailSection" aria-labelledby="emailLoginTitle">
+      <h2 id="emailLoginTitle">メールアドレスでログイン</h2>
+      <form action="/auth/email/login" method="post" class="authForm">
+        <label for="loginEmail">メールアドレス</label>
+        <input id="loginEmail" name="email" type="email" autocomplete="email" required>
+        <label for="loginPassword">パスワード</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        <button class="emailLogin" type="submit">メールアドレスでログイン</button>
+      </form>
+    </section>
+
+    <details class="registerDetails">
+      <summary>メールアドレスで新規登録</summary>
+      <form action="/auth/email/register" method="post" class="authForm registerForm">
+        <label for="registerName">表示名 <span>任意</span></label>
+        <input id="registerName" name="display_name" type="text" maxlength="80" autocomplete="nickname">
+        <label for="registerEmail">メールアドレス</label>
+        <input id="registerEmail" name="email" type="email" autocomplete="email" required>
+        <label for="registerPassword">パスワード <span>8文字以上</span></label>
+        <input id="registerPassword" name="password" type="password" minlength="8" autocomplete="new-password" required>
+        <button class="emailLogin" type="submit">アカウントを作成</button>
+      </form>
+    </details>
+
+    <a class="guestLogin" href="/auth/guest">ログインせずに単発抽選を使う</a>
+    <p class="guestNote">単発抽選では履歴を保存せず、均等確率で抽選します。</p>
+    <p class="privacy">メールアドレスはログイン管理のために保存します。パスワードは安全なハッシュ形式で保存されます。</p>
   </main>
   <footer class="loginFooter"><span>Keimaru Studio</span></footer>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const message = params.get("error") || params.get("message");
+    if (message) {
+      const target = document.getElementById("loginMessage");
+      target.textContent = message;
+      target.hidden = false;
+      target.classList.toggle("error", Boolean(params.get("error")));
+    }
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => {
+        if (!data.xAvailable) {
+          document.getElementById("xLogin").hidden = true;
+          document.getElementById("loginDivider").hidden = true;
+        }
+      })
+      .catch(() => {});
+  </script>
 </body>
 </html>

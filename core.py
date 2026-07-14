@@ -38,6 +38,17 @@ def init_db():
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS email_auth_users (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            email             TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash     TEXT NOT NULL,
+            password_salt     TEXT NOT NULL,
+            display_name      TEXT NOT NULL,
+            first_login_at    TEXT NOT NULL,
+            last_login_at     TEXT NOT NULL
+        )
+    """)
+    c.execute("""
         INSERT OR IGNORE INTO app_settings (key, value)
         VALUES ('default_event_name', 'default')
     """)

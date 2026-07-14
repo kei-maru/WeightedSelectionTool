@@ -32,13 +32,13 @@ const state = {
           $("authAvatarFallback").hidden = false;
           $("authName").textContent = "単発抽選";
           $("authUser").hidden = false;
-          $("accountAction").textContent = "Xでログイン";
-          $("accountAction").href = "/auth/login";
+          $("accountAction").textContent = "ログイン";
+          $("accountAction").href = "/login";
           $("accountAction").classList.add("loginAction");
           $("accountAction").hidden = false;
           $("accountMode").className = "accountMode guestMode";
           $("accountModeTitle").textContent = "単発抽選モード（未登録）";
-          $("accountModeDescription").innerHTML = "均等確率で抽選します。<br>Xでログインすると、確率加算＆抽選結果を保存できます。";
+          $("accountModeDescription").innerHTML = "均等確率で抽選します。<br>ログインすると、確率加算＆抽選結果を保存できます。";
           return;
         }
         if (!data.authenticated || !data.user) {
@@ -63,7 +63,7 @@ const state = {
         $("accountAction").hidden = false;
         $("accountMode").className = "accountMode savedMode";
         $("accountModeTitle").textContent = "履歴保存モード";
-        $("accountModeDescription").textContent = "抽選履歴をこのXアカウントに保存します";
+        $("accountModeDescription").textContent = "抽選履歴をこのアカウントに保存します";
       } catch (_error) {
         // The raffle UI remains usable when authentication is disabled locally.
       }

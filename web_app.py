@@ -90,7 +90,7 @@ async def index_html(request: Request):
 async def login_page(request: Request):
     if not auth_settings.required:
         return RedirectResponse("/")
-    if request.session.get("auth_user") or request.session.get("guest_id"):
+    if request.session.get("auth_user"):
         return RedirectResponse("/")
     return FileResponse(os.path.join(TEMPLATE_DIR, "login.html"))
 

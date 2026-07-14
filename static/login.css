@@ -40,6 +40,17 @@ body {
 .eyebrow { margin: 0 0 8px; color: var(--blue); font-size: 14px; }
 h1 { margin: 0; font-size: 28px; }
 .description { margin: 16px 0 24px; color: var(--muted); line-height: 1.7; }
+.loginMessage {
+  margin: -8px 0 18px;
+  padding: 10px 12px;
+  color: #216043;
+  border: 1px solid #a9e3c1;
+  border-radius: 6px;
+  background: #f1fcf5;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.loginMessage.error { color: #bb2d2d; border-color: #ffc1c1; background: #fff4f4; }
 .xLogin {
   display: block;
   width: 100%;
@@ -50,6 +61,53 @@ h1 { margin: 0; font-size: 28px; }
   text-decoration: none;
 }
 .xLogin:hover { background: #27282c; }
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.divider::before, .divider::after { flex: 1; height: 1px; content: ""; background: var(--line); }
+.emailSection { text-align: left; }
+.emailSection h2 { margin: 0 0 14px; font-size: 16px; }
+.authForm { display: grid; gap: 7px; text-align: left; }
+.authForm label { font-size: 12px; color: var(--muted); }
+.authForm label span { color: #8894ae; }
+.authForm input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+  font: inherit;
+}
+.authForm input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(47, 102, 238, .12); }
+.emailLogin {
+  width: 100%;
+  margin-top: 7px;
+  padding: 12px 16px;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  background: var(--blue);
+  font: inherit;
+  cursor: pointer;
+}
+.emailLogin:hover { background: #2559dc; }
+.registerDetails {
+  margin-top: 16px;
+  padding: 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcff;
+}
+.registerDetails summary { color: var(--blue); cursor: pointer; font-size: 14px; }
+.registerForm { margin-top: 14px; }
 .guestLogin {
   display: block;
   margin-top: 10px;
@@ -82,4 +140,8 @@ h1 { margin: 0; font-size: 28px; }
   height: 1px;
   content: "";
   background: currentColor;
+}
+@media (max-width: 480px) {
+  body { display: block; padding: 16px; }
+  .loginPanel { margin: 16px auto 56px; padding: 26px 20px; }
 }
