@@ -8,3 +8,4 @@ _build_config.py
 build/
 dist/
 *.spec
+google-form-raffle.nginx
