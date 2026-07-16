@@ -132,6 +132,14 @@ class AccountAuthService:
         if request.session.get("guest_id"):
             raise HTTPException(status_code=403, detail="ゲストモードでは保存機能を利用できません。")
 
+    async def require_guest(self, request: Request):
+        await self.require_user(request)
+        if request.session.get("auth_user"):
+            raise HTTPException(status_code=403, detail="テストデータは未ログイン時のみ利用できます。")
+        if not request.session.get("guest_id"):
+            request.session["guest_id"] = secrets.token_urlsafe(18)
+            await self.require_user(request)
+
     def start_x_login(self, request: Request):
         if not self.settings.required:
             return RedirectResponse("/")

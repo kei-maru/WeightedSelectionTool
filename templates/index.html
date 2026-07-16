@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Google form抽選ツール</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260714-02">
+  <link rel="stylesheet" href="/static/styles.css?v=20260716-06">
 </head>
 <body>
   <header>
@@ -46,6 +46,7 @@
         <label>CSV / Excel ファイル</label>
         <input id="csvFile" name="file" type="file" accept=".csv,.xls,.xlsx" hidden>
         <button id="uploadButton" class="primary" type="button" style="width:100%; margin-top:10px;">CSV / Excel を選択して読み込み</button>
+        <button id="demoButton" class="soft demoButton" type="button" hidden>テストデータで試す</button>
       </form>
 
       <div id="eventField">
@@ -169,7 +170,6 @@
       <div class="historyBatches" id="historyBatches"></div>
     </div>
   </div>
-
-  <script src="/static/app.js?v=20260714-01" defer></script>
+  <script src="/static/app.js?v=20260716-09" defer></script>
 </body>
 </html>

@@ -39,9 +39,12 @@ const state = {
           $("accountMode").className = "accountMode guestMode";
           $("accountModeTitle").textContent = "単発抽選モード（未登録）";
           $("accountModeDescription").innerHTML = "均等確率で抽選します。<br>ログインすると、確率加算＆抽選結果を保存できます。";
+          $("demoButton").hidden = false;
           return;
         }
+        $("demoButton").hidden = true;
         if (!data.authenticated || !data.user) {
+          $("demoButton").hidden = false;
           $("accountMode").className = "accountMode savedMode";
           $("accountModeTitle").textContent = "ローカル保存モード";
           $("accountModeDescription").textContent = "この端末のデータベースに履歴を保存します";
@@ -693,6 +696,22 @@ const state = {
       fileInput.value = "";
       mergeState(data, "select");
     }
+    async function loadDemoData() {
+      const button = $("demoButton");
+      button.disabled = true;
+      button.textContent = "読み込み中...";
+      try {
+        const data = await postJson("/api/demo", {});
+        mergeState(data, "select");
+        loadAuthUser();
+        setStatus("テストデータを読み込みました。列を指定して抽選を試せます。");
+      } catch (err) {
+        setStatus(err.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "テストデータで試す";
+      }
+    }
     async function uploadHistoryFile() {
       const fileInput = $("historyFile");
       if (!fileInput.files.length) return;
@@ -720,6 +739,7 @@ const state = {
     $("uploadForm").addEventListener("submit", event => event.preventDefault());
     $("uploadButton").addEventListener("click", () => $("csvFile").click());
     $("csvFile").addEventListener("change", uploadSelectedFile);
+    $("demoButton").addEventListener("click", loadDemoData);
     $("historyUploadButton").addEventListener("click", () => $("historyFile").click());
     $("historyFile").addEventListener("change", uploadHistoryFile);
     $("historyCancel").addEventListener("click", closeHistoryModal);

@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, UploadFile
@@ -7,6 +8,8 @@ from fastapi.responses import StreamingResponse
 from services.api_services import api_service
 from services.auth_service import auth_service
 
+
+DEMO_DATA_PATH = Path(__file__).with_name("テスト_基本抽選.csv")
 
 router = APIRouter(prefix="/api", dependencies=[Depends(auth_service.require_user)])
 
@@ -23,6 +26,11 @@ async def state():
 @router.post("/upload")
 async def upload(file: UploadFile):
     return api_service.raffle.upload(file.filename, await file.read())
+
+
+@router.post("/demo", dependencies=[Depends(auth_service.require_guest)])
+async def demo_upload():
+    return api_service.raffle.upload(DEMO_DATA_PATH.name, DEMO_DATA_PATH.read_bytes())
 
 
 @router.post("/history/upload", dependencies=[Depends(auth_service.require_saved_account)])
