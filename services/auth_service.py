@@ -1,15 +1,13 @@
 import base64
 import datetime
 import hashlib
-import hmac
 import os
-import re
 import secrets
 import sqlite3
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from core import db_path
@@ -19,8 +17,6 @@ from .request_context import set_request_identity
 AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
 CURRENT_USER_URL = "https://api.x.com/2/users/me"
-PASSWORD_ITERATIONS = 310_000
-EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def _enabled(name, default=False):
@@ -49,10 +45,6 @@ class AuthSettings:
     allowed_user_ids: set
     allowed_usernames: set
 
-    @property
-    def x_enabled(self):
-        return bool(self.client_id)
-
     @classmethod
     def from_env(cls):
         client_id = os.environ.get("X_CLIENT_ID", "").strip()
@@ -61,10 +53,19 @@ class AuthSettings:
             "X_REDIRECT_URI", "http://127.0.0.1:8765/auth/callback"
         ).strip()
         session_secret = os.environ.get("SESSION_SECRET", "").strip()
-        if required and not session_secret:
-            raise RuntimeError(
-                "Login is enabled, but SESSION_SECRET is missing."
-            )
+        if required:
+            missing = []
+            if not client_id:
+                missing.append("X_CLIENT_ID")
+            if not redirect_uri:
+                missing.append("X_REDIRECT_URI")
+            if not session_secret:
+                missing.append("SESSION_SECRET")
+            if missing:
+                raise RuntimeError(
+                    "X login is enabled, but these settings are missing: "
+                    + ", ".join(missing)
+                )
         return cls(
             required=required,
             client_id=client_id,
@@ -87,24 +88,13 @@ class AccountAuthService:
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     @staticmethod
-    def _password_hash(password, salt):
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode("utf-8"), salt.encode("ascii"), PASSWORD_ITERATIONS
-        )
-        return base64.b64encode(digest).decode("ascii")
-
-    @staticmethod
-    def _normalize_email(email):
-        return str(email or "").strip().lower()
-
-    @staticmethod
     def _now():
         return datetime.datetime.now().isoformat(timespec="seconds")
 
     @staticmethod
-    def _redirect_login(error="", message="", register=False):
+    def _redirect_login(error="", message=""):
         query = urlencode({key: value for key, value in {
-            "error": error, "message": message, "register": "1" if register else ""
+            "error": error, "message": message
         }.items() if value})
         return RedirectResponse(f"/login{f'?{query}' if query else ''}", status_code=303)
 
@@ -143,8 +133,6 @@ class AccountAuthService:
     def start_x_login(self, request: Request):
         if not self.settings.required:
             return RedirectResponse("/")
-        if not self.settings.x_enabled:
-            return self._redirect_login(error="Xログインはまだ設定されていません。")
         state = secrets.token_urlsafe(32)
         verifier = secrets.token_urlsafe(64)
         request.session["oauth_state"] = state
@@ -202,77 +190,6 @@ class AccountAuthService:
 
         self._check_x_allowlist(user)
         return self._finish_login(request, self._save_x_user(user))
-
-    def register_email(self, request, email, password, password_confirm, display_name):
-        if not self.settings.required:
-            return RedirectResponse("/")
-        email = self._normalize_email(email)
-        display_name = str(display_name or "").strip() or email.split("@", 1)[0]
-        if not EMAIL_PATTERN.fullmatch(email) or len(email) > 254:
-            return self._redirect_login(error="メールアドレスの形式を確認してください。", register=True)
-        if len(password or "") < 8:
-            return self._redirect_login(error="パスワードは8文字以上で設定してください。", register=True)
-        if password != password_confirm:
-            return self._redirect_login(error="確認用パスワードが一致しません。", register=True)
-        if len(password) > 1024 or len(display_name) > 80:
-            return self._redirect_login(error="入力内容が長すぎます。", register=True)
-
-        salt = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
-        now = self._now()
-        conn = sqlite3.connect(db_path())
-        try:
-            cursor = conn.execute("""
-                INSERT INTO email_auth_users (
-                    email, password_hash, password_salt, display_name,
-                    first_login_at, last_login_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-            """, (email, self._password_hash(password, salt), salt, display_name, now, now))
-            user_id = cursor.lastrowid
-            conn.commit()
-        except sqlite3.IntegrityError:
-            return self._redirect_login(error="このメールアドレスはすでに登録されています。", register=True)
-        finally:
-            conn.close()
-        return self._finish_login(request, self._email_session_user(user_id, email, display_name))
-
-    def login_email(self, request, email, password):
-        if not self.settings.required:
-            return RedirectResponse("/")
-        email = self._normalize_email(email)
-        conn = sqlite3.connect(db_path())
-        conn.row_factory = sqlite3.Row
-        user = conn.execute("""
-            SELECT id, email, password_hash, password_salt, display_name
-            FROM email_auth_users WHERE email=?
-        """, (email,)).fetchone()
-        if not user:
-            conn.close()
-            return self._redirect_login(error="メールアドレスまたはパスワードが正しくありません。")
-        actual = self._password_hash(password or "", user["password_salt"])
-        if not hmac.compare_digest(actual, user["password_hash"]):
-            conn.close()
-            return self._redirect_login(error="メールアドレスまたはパスワードが正しくありません。")
-        conn.execute(
-            "UPDATE email_auth_users SET last_login_at=? WHERE id=?",
-            (self._now(), user["id"]),
-        )
-        conn.commit()
-        conn.close()
-        return self._finish_login(
-            request,
-            self._email_session_user(user["id"], user["email"], user["display_name"]),
-        )
-
-    @staticmethod
-    def _email_session_user(user_id, email, display_name):
-        return {
-            "id": str(user_id),
-            "accountId": f"email:{user_id}",
-            "provider": "email",
-            "username": email,
-            "name": display_name,
-            "profileImageUrl": "",
-        }
 
     def _check_x_allowlist(self, user):
         if not self.settings.allowed_user_ids and not self.settings.allowed_usernames:
@@ -337,8 +254,7 @@ class AccountAuthService:
             "ok": True,
             "required": self.settings.required,
             "loginAvailable": self.settings.required,
-            "xAvailable": self.settings.x_enabled,
-            "emailAvailable": self.settings.required,
+            "xAvailable": self.settings.required,
             "authenticated": bool(user),
             "guest": guest,
             "user": user,
@@ -363,28 +279,6 @@ async def x_login(request: Request):
 @auth_router.get("/auth/callback", include_in_schema=False)
 async def callback(request: Request, code: str = None, state: str = None, error: str = None):
     return await auth_service.x_callback(request, code, state, error)
-
-
-@auth_router.post("/auth/email/register", include_in_schema=False)
-async def email_register(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-    password_confirm: str = Form(...),
-    display_name: str = Form(""),
-):
-    return auth_service.register_email(
-        request, email, password, password_confirm, display_name
-    )
-
-
-@auth_router.post("/auth/email/login", include_in_schema=False)
-async def email_login(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-):
-    return auth_service.login_email(request, email, password)
 
 
 @auth_router.get("/auth/logout", include_in_schema=False)

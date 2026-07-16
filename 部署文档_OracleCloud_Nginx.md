@@ -1,6 +1,6 @@
 # Google form抽選ツール部署文档
 
-本文档介绍如何将本项目部署到 Oracle Cloud Infrastructure（OCI）的 Ubuntu Compute 实例，并使用 Nginx、HTTPS、邮件地址登录和可选的 X OAuth 登录。
+本文档介绍如何将本项目部署到 Oracle Cloud Infrastructure（OCI）的 Ubuntu Compute 实例，并使用 Nginx、HTTPS 和 X OAuth 登录。
 
 ## 1. 部署架构
 
@@ -195,7 +195,6 @@ SESSION_SECRET=PASTE_THE_RANDOM_VALUE_HERE
 
 COOKIE_SECURE=1
 
-# Xログインも使う場合だけ設定します。
 X_CLIENT_ID=YOUR_X_CLIENT_ID
 X_CLIENT_SECRET=YOUR_X_CLIENT_SECRET
 X_REDIRECT_URI=https://raffle.keimarustudio.com/auth/callback
@@ -211,8 +210,6 @@ ALLOWED_X_USERNAMES=
 - `X_REDIRECT_URI` 必须是完整的 HTTPS 地址。
 - `.env` 已加入 `.gitignore`，不要提交密钥。
 - 更换 `SESSION_SECRET` 会让现有登录 Cookie 全部失效。
-- 邮箱账号可以直接在登录页注册；密码只会以加盐哈希形式保存。
-- 如果只使用邮箱登录，`X_CLIENT_ID`、`X_CLIENT_SECRET` 和 `X_REDIRECT_URI` 可以留空。
 - 如果 X 应用是 confidential client，则填写 `X_CLIENT_SECRET`；否则按 X 应用配置留空。
 
 ## 8. 配置 X Developer Console
